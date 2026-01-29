@@ -1,0 +1,11 @@
+# Core dependencies
+MetaTrader5>=5.0.45
+pandas>=2.0.0
+pandas-ta>=0.3.14b
+
+# Notifications
+requests>=2.31.0
+
+# Optional but recommended
+numpy>=1.24.0
+python-dotenv>=1.0.0

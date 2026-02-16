@@ -1,138 +1,166 @@
 """
-Professional logging system for Trading Bot.
-Configures rotating file and console handlers with appropriate formatting.
+Sistema de Logging Profissional para Trading Bot
+Implementa logging rotativo com níveis distintos
 """
 
 import logging
-import sys
+import os
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
+from datetime import datetime
 from typing import Optional
-
-from config import config
+from pathlib import Path
 
 
 class TradingLogger:
-    """Centralized logging configuration for the trading bot."""
-    
-    _loggers = {}
-    
-    @classmethod
-    def get_logger(cls, name: str) -> logging.Logger:
+    """
+    Logger singleton para o sistema de trading
+    Implementa logging em arquivo rotativo e console
+    """
+    _instance: Optional['TradingLogger'] = None
+    _logger: Optional[logging.Logger] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if self._logger is not None:
+            return
+        
+        self._logger = logging.getLogger('TradingBot')
+        self._logger.setLevel(logging.DEBUG)
+        self._logger.handlers.clear()
+
+    def setup(
+        self,
+        log_level: str = 'INFO',
+        log_to_file: bool = True,
+        log_dir: str = 'logs',
+        max_bytes: int = 10485760,
+        backup_count: int = 5
+    ) -> None:
         """
-        Get or create a logger instance.
+        Configura o sistema de logging
         
         Args:
-            name: Logger name (typically __name__ of the module)
-            
-        Returns:
-            Configured logger instance
+            log_level: Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+            log_to_file: Se deve logar em arquivo
+            log_dir: Diretório dos logs
+            max_bytes: Tamanho máximo do arquivo de log
+            backup_count: Número de backups rotativos
         """
-        if name in cls._loggers:
-            return cls._loggers[name]
-        
-        logger = logging.getLogger(name)
-        
-        # Only configure if not already configured
-        if not logger.handlers:
-            cls._configure_logger(logger)
-        
-        cls._loggers[name] = logger
-        return logger
-    
-    @classmethod
-    def _configure_logger(cls, logger: logging.Logger) -> None:
-        """Configure logger with file and console handlers."""
-        log_level = config.get('logging', 'level', default='INFO')
-        logger.setLevel(getattr(logging, log_level))
-        
-        # Create formatters
-        detailed_formatter = logging.Formatter(
+        # Formato detalhado
+        formatter = logging.Formatter(
             '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        
-        console_formatter = logging.Formatter(
-            '%(asctime)s | %(levelname)-8s | %(message)s',
-            datefmt='%H:%M:%S'
-        )
-        
-        # File handler with rotation
-        log_file = config.get('logging', 'file', default='logs/trading_bot.log')
-        log_path = Path(log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        max_bytes = config.get('logging', 'max_bytes', default=10485760)  # 10MB
-        backup_count = config.get('logging', 'backup_count', default=5)
-        
-        file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(detailed_formatter)
-        
-        # Console handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(console_formatter)
-        
-        # Add handlers
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-    
-    @classmethod
-    def log_trade(cls, action: str, symbol: str, lot: float, 
-                  price: float, sl: float, tp: float, 
-                  reason: str = "", order_id: Optional[int] = None) -> None:
+
+        # Console Handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(getattr(logging, log_level))
+        console_handler.setFormatter(formatter)
+        self._logger.addHandler(console_handler)
+
+        # File Handler (rotativo)
+        if log_to_file:
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            
+            log_filename = os.path.join(
+                log_dir,
+                f"trading_bot_{datetime.now().strftime('%Y%m%d')}.log"
+            )
+            
+            file_handler = RotatingFileHandler(
+                log_filename,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            self._logger.addHandler(file_handler)
+
+        self._logger.info("=" * 80)
+        self._logger.info("Sistema de Logging Inicializado")
+        self._logger.info("=" * 80)
+
+    def get_logger(self) -> logging.Logger:
+        """Retorna a instância do logger"""
+        return self._logger
+
+    def log_trade(
+        self,
+        action: str,
+        symbol: str,
+        volume: float,
+        price: float,
+        sl: float = 0.0,
+        tp: float = 0.0,
+        ticket: int = 0
+    ) -> None:
         """
-        Log trade execution with standardized format.
+        Log especializado para operações de trading
         
         Args:
-            action: Trade action (BUY/SELL)
-            symbol: Trading symbol
-            lot: Position size
-            price: Entry price
-            sl: Stop loss
-            tp: Take profit
-            reason: Reason for trade
-            order_id: MT5 order ID if available
+            action: Tipo de ação (BUY, SELL, CLOSE)
+            symbol: Símbolo negociado
+            volume: Volume da operação
+            price: Preço de entrada/saída
+            sl: Stop Loss
+            tp: Take Profit
+            ticket: Número do ticket
         """
-        logger = cls.get_logger('TRADE')
+        msg = f"TRADE | {action} | {symbol} | Vol: {volume:.2f} | Price: {price:.5f}"
+        if sl > 0:
+            msg += f" | SL: {sl:.5f}"
+        if tp > 0:
+            msg += f" | TP: {tp:.5f}"
+        if ticket > 0:
+            msg += f" | Ticket: {ticket}"
         
-        trade_info = (
-            f"{action} {symbol} | Lot: {lot:.2f} | "
-            f"Price: {price:.5f} | SL: {sl:.5f} | TP: {tp:.5f}"
-        )
-        
-        if order_id:
-            trade_info += f" | Order: {order_id}"
-        
-        if reason:
-            trade_info += f" | Reason: {reason}"
-        
-        logger.info(trade_info)
-    
-    @classmethod
-    def log_error(cls, error_msg: str, exception: Optional[Exception] = None) -> None:
+        self._logger.info(msg)
+
+    def log_signal(self, symbol: str, signal: str, reason: str) -> None:
         """
-        Log errors with optional exception details.
+        Log especializado para sinais de estratégia
         
         Args:
-            error_msg: Error message
-            exception: Exception object if available
+            symbol: Símbolo
+            signal: Tipo de sinal (BUY, SELL, HOLD)
+            reason: Razão do sinal
         """
-        logger = cls.get_logger('ERROR')
+        self._logger.info(f"SIGNAL | {symbol} | {signal} | {reason}")
+
+    def log_risk_event(self, event_type: str, details: str) -> None:
+        """
+        Log especializado para eventos de gestão de risco
         
+        Args:
+            event_type: Tipo de evento
+            details: Detalhes do evento
+        """
+        self._logger.warning(f"RISK | {event_type} | {details}")
+
+    def log_error(self, error_type: str, error_msg: str, exception: Optional[Exception] = None) -> None:
+        """
+        Log especializado para erros
+        
+        Args:
+            error_type: Tipo de erro
+            error_msg: Mensagem de erro
+            exception: Exceção capturada (opcional)
+        """
+        msg = f"ERROR | {error_type} | {error_msg}"
         if exception:
-            logger.error(f"{error_msg} | Exception: {str(exception)}", exc_info=True)
+            self._logger.error(msg, exc_info=True)
         else:
-            logger.error(error_msg)
+            self._logger.error(msg)
 
 
-# Convenience function
-def get_logger(name: str) -> logging.Logger:
-    """Get logger instance for a module."""
-    return TradingLogger.get_logger(name)
+# Instância global
+logger_instance = TradingLogger()
+
+def get_logger() -> logging.Logger:
+    """Função helper para obter o logger"""
+    return logger_instance.get_logger()

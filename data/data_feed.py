@@ -1,63 +1,62 @@
 """
-Market Data Handler with circular buffer and technical indicators.
-Efficiently manages multi-symbol price data and calculates indicators.
+Market Data Handler com Buffer Circular
+Gerencia dados históricos e indicadores técnicos de múltiplos símbolos
 """
 
 import MetaTrader5 as mt5
 import pandas as pd
 import pandas_ta as ta
+from typing import Dict, Optional, List, Tuple
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
 from collections import deque
-
-from config import config
 from core.logger import get_logger
-from core.mt5_interface import MT5Client
-
-logger = get_logger(__name__)
 
 
 class MarketDataHandler:
     """
-    Manages market data collection and indicator calculation.
-    Uses circular buffers for memory efficiency.
+    Gerenciador de dados de mercado com buffer circular
+    Mantém histórico rolante de dados para múltiplos símbolos
     """
-    
-    def __init__(self, buffer_size: int = 1000):
+
+    def __init__(
+        self,
+        symbols: List[str],
+        timeframe: str = 'M15',
+        buffer_size: int = 1000
+    ):
         """
-        Initialize market data handler.
+        Inicializa o handler de dados
         
         Args:
-            buffer_size: Maximum number of candles to store per symbol
+            symbols: Lista de símbolos a monitorar
+            timeframe: Timeframe dos dados (M1, M5, M15, H1, etc)
+            buffer_size: Tamanho do buffer circular
         """
+        self.logger = get_logger()
+        self.symbols = symbols
+        self.timeframe = self._parse_timeframe(timeframe)
         self.buffer_size = buffer_size
-        self.mt5_client = MT5Client()
         
-        # Data buffers: {symbol: DataFrame}
+        # Buffer circular para cada símbolo
         self.data_buffers: Dict[str, pd.DataFrame] = {}
+        self.last_update: Dict[str, datetime] = {}
         
-        # Symbols to track
-        self.symbols = config.get('trading', 'symbols', default=[])
-        self.timeframe = self._parse_timeframe(config.get('trading', 'timeframe', default='M15'))
+        # Cache de indicadores
+        self.indicators_cache: Dict[str, Dict[str, pd.Series]] = {}
         
-        # Indicator parameters
-        self.atr_period = config.get('strategy', 'atr_period', default=14)
-        self.ema_period = config.get('strategy', 'ema_period', default=200)
-        self.rsi_period = config.get('strategy', 'rsi_period', default=14)
-        
-        logger.info(f"MarketDataHandler initialized | Symbols: {self.symbols} | Timeframe: {self.timeframe}")
-    
-    def _parse_timeframe(self, timeframe_str: str) -> int:
+        self.logger.info(f"MarketDataHandler inicializado para {len(symbols)} símbolos")
+
+    def _parse_timeframe(self, timeframe: str) -> int:
         """
-        Parse timeframe string to MT5 constant.
+        Converte string de timeframe para constante MT5
         
         Args:
-            timeframe_str: Timeframe string (e.g., 'M15', 'H1', 'D1')
+            timeframe: String do timeframe (M1, M5, M15, H1, H4, D1)
             
         Returns:
-            MT5 timeframe constant
+            Constante MT5 do timeframe
         """
-        timeframe_map = {
+        timeframes = {
             'M1': mt5.TIMEFRAME_M1,
             'M5': mt5.TIMEFRAME_M5,
             'M15': mt5.TIMEFRAME_M15,
@@ -66,231 +65,255 @@ class MarketDataHandler:
             'H4': mt5.TIMEFRAME_H4,
             'D1': mt5.TIMEFRAME_D1,
             'W1': mt5.TIMEFRAME_W1,
+            'MN1': mt5.TIMEFRAME_MN1
         }
         
-        return timeframe_map.get(timeframe_str, mt5.TIMEFRAME_M15)
-    
+        tf = timeframes.get(timeframe.upper())
+        if tf is None:
+            self.logger.warning(f"Timeframe {timeframe} inválido, usando M15")
+            return mt5.TIMEFRAME_M15
+        
+        return tf
+
     def initialize_buffers(self) -> bool:
         """
-        Initialize data buffers for all symbols.
+        Inicializa os buffers com dados históricos
         
         Returns:
-            True if all buffers initialized successfully
+            True se inicialização bem sucedida
         """
-        success = True
+        self.logger.info("Inicializando buffers de dados históricos...")
         
+        success_count = 0
         for symbol in self.symbols:
-            if not self._load_initial_data(symbol):
-                logger.error(f"Failed to initialize buffer for {symbol}")
-                success = False
+            if self._load_historical_data(symbol):
+                success_count += 1
         
-        return success
-    
-    def _load_initial_data(self, symbol: str) -> bool:
+        self.logger.info(
+            f"Buffers inicializados: {success_count}/{len(self.symbols)} símbolos"
+        )
+        
+        return success_count == len(self.symbols)
+
+    def _load_historical_data(self, symbol: str) -> bool:
         """
-        Load initial historical data for a symbol.
+        Carrega dados históricos para um símbolo
         
         Args:
-            symbol: Trading symbol
+            symbol: Símbolo a carregar
             
         Returns:
-            True if data loaded successfully
+            True se carregamento bem sucedido
         """
         try:
-            # Get historical data
+            # Tenta obter dados históricos
             rates = mt5.copy_rates_from_pos(symbol, self.timeframe, 0, self.buffer_size)
             
             if rates is None or len(rates) == 0:
-                logger.error(f"No data received for {symbol}")
+                self.logger.error(f"Falha ao obter dados para {symbol}: {mt5.last_error()}")
                 return False
             
-            # Convert to DataFrame
+            # Converte para DataFrame
             df = pd.DataFrame(rates)
             df['time'] = pd.to_datetime(df['time'], unit='s')
             df.set_index('time', inplace=True)
             
-            # Calculate indicators
-            df = self._calculate_indicators(df)
+            # Renomeia colunas para padrão
+            df.columns = ['open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
             
             self.data_buffers[symbol] = df
-            logger.info(f"Loaded {len(df)} candles for {symbol}")
+            self.last_update[symbol] = datetime.now()
+            
+            self.logger.info(
+                f"Carregados {len(df)} candles para {symbol} "
+                f"({df.index[0]} até {df.index[-1]})"
+            )
             
             return True
             
         except Exception as e:
-            logger.error(f"Error loading data for {symbol}: {e}")
+            self.logger.error(f"Erro ao carregar dados de {symbol}: {str(e)}", exc_info=True)
             return False
-    
+
     def update_data(self, symbol: Optional[str] = None) -> bool:
         """
-        Update market data for symbols (incremental update).
+        Atualiza dados com os candles mais recentes
         
         Args:
-            symbol: Specific symbol to update, or None for all
+            symbol: Símbolo específico ou None para todos
             
         Returns:
-            True if update successful
+            True se atualização bem sucedida
         """
         symbols_to_update = [symbol] if symbol else self.symbols
         success = True
         
         for sym in symbols_to_update:
             if sym not in self.data_buffers:
-                logger.warning(f"Buffer not initialized for {sym}, loading initial data")
-                if not self._load_initial_data(sym):
-                    success = False
-                    continue
+                self.logger.warning(f"Buffer não inicializado para {sym}")
+                continue
             
             try:
-                # Get the latest candle
-                rates = mt5.copy_rates_from_pos(sym, self.timeframe, 0, 1)
+                # Obtém apenas os últimos candles
+                rates = mt5.copy_rates_from_pos(sym, self.timeframe, 0, 10)
                 
                 if rates is None or len(rates) == 0:
-                    logger.warning(f"No new data for {sym}")
+                    self.logger.warning(f"Sem novos dados para {sym}")
+                    success = False
                     continue
                 
-                # Convert to DataFrame
-                new_data = pd.DataFrame(rates)
-                new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
-                new_data.set_index('time', inplace=True)
+                # Converte para DataFrame
+                new_df = pd.DataFrame(rates)
+                new_df['time'] = pd.to_datetime(new_df['time'], unit='s')
+                new_df.set_index('time', inplace=True)
+                new_df.columns = ['open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
                 
-                # Check if this is truly new data
+                # Obtém último timestamp do buffer
                 last_time = self.data_buffers[sym].index[-1]
-                new_time = new_data.index[0]
                 
-                if new_time > last_time:
-                    # Append new candle
-                    self.data_buffers[sym] = pd.concat([self.data_buffers[sym], new_data])
+                # Filtra apenas candles novos
+                new_candles = new_df[new_df.index > last_time]
+                
+                if len(new_candles) > 0:
+                    # Adiciona novos candles ao buffer
+                    self.data_buffers[sym] = pd.concat([self.data_buffers[sym], new_candles])
                     
-                    # Maintain buffer size
+                    # Mantém apenas últimos buffer_size candles
                     if len(self.data_buffers[sym]) > self.buffer_size:
                         self.data_buffers[sym] = self.data_buffers[sym].iloc[-self.buffer_size:]
                     
-                    # Recalculate indicators (only for recent data)
-                    self.data_buffers[sym] = self._calculate_indicators(
-                        self.data_buffers[sym],
-                        incremental=True
-                    )
+                    self.last_update[sym] = datetime.now()
                     
-                    logger.debug(f"Updated data for {sym} | New candle: {new_time}")
-                else:
-                    # Update current candle (in-progress)
-                    self.data_buffers[sym].iloc[-1] = new_data.iloc[0]
+                    # Limpa cache de indicadores ao adicionar novos dados
+                    if sym in self.indicators_cache:
+                        self.indicators_cache[sym].clear()
                     
+                    self.logger.debug(f"Adicionados {len(new_candles)} novos candles para {sym}")
+                
             except Exception as e:
-                logger.error(f"Error updating data for {sym}: {e}")
+                self.logger.error(f"Erro ao atualizar {sym}: {str(e)}", exc_info=True)
                 success = False
         
         return success
-    
-    def _calculate_indicators(self, df: pd.DataFrame, incremental: bool = False) -> pd.DataFrame:
+
+    def get_data(self, symbol: str, bars: Optional[int] = None) -> Optional[pd.DataFrame]:
         """
-        Calculate technical indicators using pandas_ta.
+        Retorna dados do buffer para um símbolo
         
         Args:
-            df: Price DataFrame
-            incremental: If True, only recalculate last few rows
+            symbol: Símbolo
+            bars: Número de barras (None para todas)
             
         Returns:
-            DataFrame with indicators added
-        """
-        try:
-            if incremental and len(df) > 50:
-                # For incremental updates, recalculate only last 50 rows
-                # This is a compromise between accuracy and performance
-                calc_df = df.iloc[-50:].copy()
-            else:
-                calc_df = df.copy()
-            
-            # ATR (Average True Range)
-            calc_df.ta.atr(length=self.atr_period, append=True)
-            
-            # EMA (Exponential Moving Average)
-            calc_df.ta.ema(length=self.ema_period, append=True)
-            
-            # RSI (Relative Strength Index)
-            calc_df.ta.rsi(length=self.rsi_period, append=True)
-            
-            if incremental and len(df) > 50:
-                # Update only the calculated portion
-                indicator_cols = [col for col in calc_df.columns if col not in df.columns or col.startswith('ATR') or col.startswith('EMA') or col.startswith('RSI')]
-                df.loc[calc_df.index, indicator_cols] = calc_df[indicator_cols]
-                return df
-            else:
-                return calc_df
-            
-        except Exception as e:
-            logger.error(f"Error calculating indicators: {e}")
-            return df
-    
-    def get_current_data(self, symbol: str, periods: int = 100) -> Optional[pd.DataFrame]:
-        """
-        Get recent data for a symbol.
-        
-        Args:
-            symbol: Trading symbol
-            periods: Number of recent periods to return
-            
-        Returns:
-            DataFrame with recent data or None
+            DataFrame com os dados ou None
         """
         if symbol not in self.data_buffers:
-            logger.warning(f"No data available for {symbol}")
+            self.logger.error(f"Buffer não existe para {symbol}")
             return None
         
-        return self.data_buffers[symbol].tail(periods).copy()
-    
-    def get_latest_values(self, symbol: str) -> Optional[Dict]:
+        df = self.data_buffers[symbol]
+        
+        if bars is not None:
+            df = df.iloc[-bars:]
+        
+        return df.copy()
+
+    def calculate_indicators(
+        self,
+        symbol: str,
+        indicators: Dict[str, Dict[str, any]]
+    ) -> Optional[pd.DataFrame]:
         """
-        Get latest price and indicator values.
+        Calcula indicadores técnicos usando pandas_ta
         
         Args:
-            symbol: Trading symbol
-            
+            symbol: Símbolo
+            indicators: Dicionário com indicadores e parâmetros
+                       Ex: {'ema': {'length': 200}, 'rsi': {'length': 14}}
+        
         Returns:
-            Dictionary with latest values or None
+            DataFrame com dados e indicadores
         """
-        if symbol not in self.data_buffers or len(self.data_buffers[symbol]) == 0:
+        df = self.get_data(symbol)
+        if df is None or len(df) == 0:
             return None
         
-        latest = self.data_buffers[symbol].iloc[-1]
-        
-        return {
-            'time': latest.name,
-            'open': latest['open'],
-            'high': latest['high'],
-            'low': latest['low'],
-            'close': latest['close'],
-            'volume': latest['tick_volume'],
-            'atr': latest.get(f'ATRr_{self.atr_period}', 0),
-            'ema': latest.get(f'EMA_{self.ema_period}', 0),
-            'rsi': latest.get(f'RSI_{self.rsi_period}', 0)
-        }
-    
-    def get_tick(self, symbol: str) -> Optional[Dict]:
+        try:
+            # Calcula cada indicador
+            for indicator_name, params in indicators.items():
+                if indicator_name.lower() == 'ema':
+                    length = params.get('length', 200)
+                    df[f'ema_{length}'] = ta.ema(df['close'], length=length)
+                
+                elif indicator_name.lower() == 'rsi':
+                    length = params.get('length', 14)
+                    df['rsi'] = ta.rsi(df['close'], length=length)
+                
+                elif indicator_name.lower() == 'atr':
+                    length = params.get('length', 14)
+                    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=length)
+                
+                elif indicator_name.lower() == 'macd':
+                    fast = params.get('fast', 12)
+                    slow = params.get('slow', 26)
+                    signal = params.get('signal', 9)
+                    macd = ta.macd(df['close'], fast=fast, slow=slow, signal=signal)
+                    df = pd.concat([df, macd], axis=1)
+                
+                elif indicator_name.lower() == 'bbands':
+                    length = params.get('length', 20)
+                    std = params.get('std', 2)
+                    bbands = ta.bbands(df['close'], length=length, std=std)
+                    df = pd.concat([df, bbands], axis=1)
+                
+                elif indicator_name.lower() == 'sma':
+                    length = params.get('length', 50)
+                    df[f'sma_{length}'] = ta.sma(df['close'], length=length)
+            
+            return df
+            
+        except Exception as e:
+            self.logger.error(
+                f"Erro ao calcular indicadores para {symbol}: {str(e)}",
+                exc_info=True
+            )
+            return None
+
+    def get_latest_price(self, symbol: str) -> Optional[Tuple[float, float]]:
         """
-        Get current tick data for symbol.
+        Obtém último preço bid/ask
         
         Args:
-            symbol: Trading symbol
+            symbol: Símbolo
             
         Returns:
-            Dictionary with tick data or None
+            Tupla (bid, ask) ou None
         """
         try:
             tick = mt5.symbol_info_tick(symbol)
-            
             if tick is None:
                 return None
             
-            return {
-                'time': datetime.fromtimestamp(tick.time),
-                'bid': tick.bid,
-                'ask': tick.ask,
-                'last': tick.last,
-                'volume': tick.volume
-            }
+            return (tick.bid, tick.ask)
             
         except Exception as e:
-            logger.error(f"Error getting tick for {symbol}: {e}")
+            self.logger.error(f"Erro ao obter preço de {symbol}: {str(e)}")
             return None
+
+    def get_buffer_info(self) -> Dict[str, Dict[str, any]]:
+        """
+        Retorna informações sobre os buffers
+        
+        Returns:
+            Dicionário com informações dos buffers
+        """
+        info = {}
+        for symbol, df in self.data_buffers.items():
+            info[symbol] = {
+                'size': len(df),
+                'first_candle': df.index[0] if len(df) > 0 else None,
+                'last_candle': df.index[-1] if len(df) > 0 else None,
+                'last_update': self.last_update.get(symbol)
+            }
+        
+        return info

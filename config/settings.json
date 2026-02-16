@@ -1,0 +1,58 @@
+{
+  "mt5": {
+    "login": 5046661606,
+    "password": "XyNyW!5e",
+    "server": "MetaQuotes-Demo",
+    "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "timeout": 60000,
+    "retry_attempts": 3,
+    "retry_delay": 5
+  },
+  "trading": {
+    "symbols": ["EURUSD", "GBPUSD", "USDJPY"],
+    "timeframe": "M15",
+    "magic_number": 234567,
+    "max_positions": 3,
+    "enable_trading": true
+  },
+  "risk": {
+    "risk_percent_per_trade": 1.0,
+    "max_daily_drawdown_percent": 3.0,
+    "max_position_size": 1.0,
+    "min_position_size": 0.01,
+    "use_dynamic_sizing": true
+  },
+  "strategy": {
+    "atr_trend_follower": {
+      "ema_period": 200,
+      "rsi_period": 14,
+      "rsi_oversold": 30,
+      "rsi_overbought": 70,
+      "atr_period": 14,
+      "atr_multiplier_stop": 2.0,
+      "atr_multiplier_target": 3.0,
+      "min_bars": 250
+    }
+  },
+  "schedule": {
+    "trading_hours": {
+      "start": "09:00",
+      "end": "17:00"
+    },
+    "timezone": "America/Sao_Paulo"
+  },
+  "notifications": {
+    "telegram": {
+      "enabled": false,
+      "bot_token": "YOUR_BOT_TOKEN",
+      "chat_id": "YOUR_CHAT_ID"
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "log_to_file": true,
+    "log_dir": "logs",
+    "max_bytes": 10485760,
+    "backup_count": 5
+  }
+}

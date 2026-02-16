@@ -1,213 +1,268 @@
 """
-MetaTrader 5 Interface with Singleton pattern and intelligent retry mechanism.
-Handles connection, reconnection, and validates trading permissions.
+Interface MT5 com padrão Singleton e retry logic inteligente
+Gerencia conexão única e robusta com o MetaTrader 5
 """
 
 import MetaTrader5 as mt5
 import time
-from typing import Optional, Callable, Any
+from typing import Optional, Dict, Any, Callable
 from functools import wraps
-
-from config import config
+from datetime import datetime
 from core.logger import get_logger
 
-logger = get_logger(__name__)
+
+class ConnectionError(Exception):
+    """Erro de conexão com MT5"""
+    pass
 
 
-def retry_on_connection_failure(max_attempts: int = 3, delay: int = 5):
+class AuthenticationError(Exception):
+    """Erro de autenticação MT5"""
+    pass
+
+
+def retry_on_connection_error(max_attempts: int = 3, delay: int = 5):
     """
-    Decorator for automatic retry on transient connection failures.
+    Decorador para retry inteligente em operações MT5
     
     Args:
-        max_attempts: Maximum number of retry attempts
-        delay: Delay in seconds between retries
+        max_attempts: Número máximo de tentativas
+        delay: Delay entre tentativas em segundos
     """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            last_exception = None
+        def wrapper(*args, **kwargs):
+            logger = get_logger()
+            last_error = None
             
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
-                except MT5ConnectionError as e:
-                    last_exception = e
+                except ConnectionError as e:
+                    last_error = e
+                    error_code = mt5.last_error()
                     
-                    # Don't retry on authentication errors
-                    if "authentication" in str(e).lower() or "invalid" in str(e).lower():
-                        logger.error(f"Authentication error, not retrying: {e}")
-                        raise
+                    # Erros de autenticação não devem ser retriados
+                    if error_code[0] in [10004, 10005, 10006]:  # Erros de credenciais
+                        logger.error(f"Erro de autenticação: {error_code}. Não será retriado.")
+                        raise AuthenticationError(f"Falha de autenticação: {error_code}")
                     
-                    if attempt < max_attempts:
-                        logger.warning(f"Connection failed (attempt {attempt}/{max_attempts}), retrying in {delay}s...")
-                        time.sleep(delay)
-                    else:
-                        logger.error(f"All {max_attempts} connection attempts failed")
-                        raise last_exception
+                    # Erros transientes podem ser retriados
+                    if error_code[0] in [-10005, -2]:  # Connection lost, timeout
+                        if attempt < max_attempts:
+                            logger.warning(
+                                f"Tentativa {attempt}/{max_attempts} falhou com erro {error_code}. "
+                                f"Retentando em {delay}s..."
+                            )
+                            time.sleep(delay)
+                            continue
+                    
+                    # Outros erros também levantam exceção
+                    raise
+                except Exception as e:
+                    logger.error(f"Erro inesperado em {func.__name__}: {str(e)}", exc_info=True)
+                    raise
             
-            return None
+            # Se todas as tentativas falharam
+            raise last_error
+        
         return wrapper
     return decorator
 
 
-class MT5ConnectionError(Exception):
-    """Custom exception for MT5 connection errors."""
-    pass
-
-
 class MT5Client:
     """
-    Singleton MetaTrader 5 client with connection management.
-    Ensures only one instance connects to MT5 terminal.
+    Cliente Singleton para conexão com MetaTrader 5
+    Garante uma única instância de conexão em todo o sistema
     """
-    
     _instance: Optional['MT5Client'] = None
-    _initialized: bool = False
-    
+    _connected: bool = False
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
-    
+
     def __init__(self):
-        """Initialize MT5 client (only once)."""
-        if not self._initialized:
-            self._connected = False
-            self._account_info = None
-            MT5Client._initialized = True
-    
-    @retry_on_connection_failure(max_attempts=3, delay=5)
-    def connect(self) -> bool:
+        self.logger = get_logger()
+        self._config: Optional[Dict[str, Any]] = None
+
+    @retry_on_connection_error(max_attempts=3, delay=5)
+    def connect(
+        self,
+        login: int,
+        password: str,
+        server: str,
+        path: str = "",
+        timeout: int = 60000
+    ) -> bool:
         """
-        Establish connection to MT5 terminal with automatic retry.
+        Conecta ao MetaTrader 5 com retry automático
         
+        Args:
+            login: Número da conta
+            password: Senha da conta
+            server: Servidor MT5
+            path: Caminho do terminal (opcional)
+            timeout: Timeout em milliseconds
+            
         Returns:
-            True if connection successful
+            True se conectado com sucesso
             
         Raises:
-            MT5ConnectionError: If connection fails after all retries
+            ConnectionError: Se falha na conexão
+            AuthenticationError: Se falha na autenticação
         """
         if self._connected:
-            logger.info("Already connected to MT5")
+            self.logger.info("MT5 já está conectado")
             return True
-        
-        # Initialize MT5
-        mt5_path = config.get('mt5', 'path', default='')
-        
-        if not mt5.initialize(path=mt5_path if mt5_path else None):
-            error_code = mt5.last_error()
-            raise MT5ConnectionError(f"MT5 initialization failed: {error_code}")
-        
-        # Login to account
-        login = config.get('mt5', 'login')
-        password = config.get('mt5', 'password')
-        server = config.get('mt5', 'server')
-        timeout = config.get('mt5', 'timeout', default=60000)
-        
-        if not mt5.login(login=login, password=password, server=server, timeout=timeout):
-            error_code = mt5.last_error()
+
+        # Inicializa o MT5
+        if path:
+            if not mt5.initialize(path=path, login=login, password=password, server=server, timeout=timeout):
+                error = mt5.last_error()
+                raise ConnectionError(f"Falha ao inicializar MT5: {error}")
+        else:
+            if not mt5.initialize(login=login, password=password, server=server, timeout=timeout):
+                error = mt5.last_error()
+                raise ConnectionError(f"Falha ao inicializar MT5: {error}")
+
+        # Verifica se conectou
+        if not mt5.login(login=login, password=password, server=server):
+            error = mt5.last_error()
             mt5.shutdown()
-            raise MT5ConnectionError(f"MT5 login failed: {error_code}")
-        
-        # Validate trading permissions
-        if not self._validate_trading_enabled():
+            raise AuthenticationError(f"Falha no login MT5: {error}")
+
+        # Verifica informações da conta
+        account_info = mt5.account_info()
+        if account_info is None:
             mt5.shutdown()
-            raise MT5ConnectionError("Algorithmic trading is not enabled in MT5 terminal")
-        
-        self._connected = True
-        self._account_info = mt5.account_info()
-        
-        logger.info(f"Connected to MT5 | Account: {login} | Server: {server} | Balance: {self._account_info.balance}")
-        return True
-    
-    def _validate_trading_enabled(self) -> bool:
-        """
-        Check if algorithmic trading is enabled.
-        
-        Returns:
-            True if trading is allowed
-        """
+            raise ConnectionError("Não foi possível obter informações da conta")
+
+        # Verifica se trading automático está habilitado
         terminal_info = mt5.terminal_info()
-        
         if terminal_info is None:
-            logger.error("Failed to get terminal info")
-            return False
-        
+            mt5.shutdown()
+            raise ConnectionError("Não foi possível obter informações do terminal")
+
         if not terminal_info.trade_allowed:
-            logger.error("Algorithmic trading is disabled in terminal settings")
-            return False
-        
+            self.logger.warning("AlgoTrading não está habilitado no terminal!")
+            self.logger.warning("Por favor, habilite 'Permitir negociação algorítmica' nas opções do MT5")
+
+        self._connected = True
+        self._config = {
+            'login': login,
+            'server': server,
+            'account_info': account_info._asdict(),
+            'terminal_info': terminal_info._asdict()
+        }
+
+        self.logger.info("=" * 80)
+        self.logger.info(f"Conectado ao MT5 com sucesso!")
+        self.logger.info(f"Conta: {account_info.login} | Servidor: {account_info.server}")
+        self.logger.info(f"Saldo: {account_info.balance:.2f} | Equity: {account_info.equity:.2f}")
+        self.logger.info(f"Margem Livre: {account_info.margin_free:.2f}")
+        self.logger.info(f"AlgoTrading: {'HABILITADO' if terminal_info.trade_allowed else 'DESABILITADO'}")
+        self.logger.info("=" * 80)
+
         return True
-    
+
     def disconnect(self) -> None:
-        """Disconnect from MT5 terminal."""
+        """Desconecta do MT5"""
         if self._connected:
             mt5.shutdown()
             self._connected = False
-            logger.info("Disconnected from MT5")
-    
+            self.logger.info("Desconectado do MT5")
+
     def is_connected(self) -> bool:
-        """Check if connected to MT5."""
+        """Verifica se está conectado"""
+        return self._connected
+
+    def check_connection(self) -> bool:
+        """
+        Verifica se a conexão ainda está ativa
+        
+        Returns:
+            True se conectado e funcional
+        """
         if not self._connected:
             return False
-        
-        # Verify connection is still alive
+
         try:
             account_info = mt5.account_info()
-            return account_info is not None
+            if account_info is None:
+                self._connected = False
+                return False
+            return True
         except Exception as e:
-            logger.error(f"Connection check failed: {e}")
+            self.logger.error(f"Erro ao verificar conexão: {str(e)}")
             self._connected = False
             return False
-    
+
+    def get_account_info(self) -> Optional[Dict[str, Any]]:
+        """
+        Retorna informações da conta
+        
+        Returns:
+            Dicionário com informações da conta ou None
+        """
+        if not self._connected:
+            self.logger.error("Não conectado ao MT5")
+            return None
+
+        account_info = mt5.account_info()
+        if account_info is None:
+            self.logger.error("Falha ao obter informações da conta")
+            return None
+
+        return account_info._asdict()
+
+    def get_terminal_info(self) -> Optional[Dict[str, Any]]:
+        """
+        Retorna informações do terminal
+        
+        Returns:
+            Dicionário com informações do terminal ou None
+        """
+        if not self._connected:
+            self.logger.error("Não conectado ao MT5")
+            return None
+
+        terminal_info = mt5.terminal_info()
+        if terminal_info is None:
+            self.logger.error("Falha ao obter informações do terminal")
+            return None
+
+        return terminal_info._asdict()
+
     def reconnect(self) -> bool:
         """
-        Attempt to reconnect to MT5.
+        Tenta reconectar usando configurações anteriores
         
         Returns:
-            True if reconnection successful
+            True se reconexão bem sucedida
         """
-        logger.info("Attempting to reconnect to MT5...")
-        self.disconnect()
-        time.sleep(2)
-        
-        try:
-            return self.connect()
-        except MT5ConnectionError as e:
-            logger.error(f"Reconnection failed: {e}")
+        if self._config is None:
+            self.logger.error("Nenhuma configuração anterior disponível para reconexão")
             return False
-    
-    def get_account_info(self) -> Optional[Any]:
-        """
-        Get current account information.
-        
-        Returns:
-            Account info object or None
-        """
-        if not self.is_connected():
-            logger.error("Not connected to MT5")
-            return None
-        
-        return mt5.account_info()
-    
-    def get_terminal_info(self) -> Optional[Any]:
-        """
-        Get terminal information.
-        
-        Returns:
-            Terminal info object or None
-        """
-        if not self.is_connected():
-            logger.error("Not connected to MT5")
-            return None
-        
-        return mt5.terminal_info()
-    
+
+        self.logger.info("Tentando reconectar ao MT5...")
+        self._connected = False
+
+        try:
+            return self.connect(
+                login=self._config['login'],
+                password="",  # Senha não é armazenada por segurança
+                server=self._config['server']
+            )
+        except Exception as e:
+            self.logger.error(f"Falha na reconexão: {str(e)}")
+            return False
+
     def __enter__(self):
-        """Context manager entry."""
-        self.connect()
+        """Context manager entry"""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
+        """Context manager exit"""
         self.disconnect()

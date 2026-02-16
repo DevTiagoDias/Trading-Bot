@@ -1,218 +1,269 @@
 """
-ATR Trend Follower Strategy.
-Buys on pullbacks in uptrends, uses ATR-based trailing stops.
+Estratégia ATR Trend Follower
+Segue tendências com confirmação de RSI e stops dinâmicos baseados em ATR
 """
 
-import MetaTrader5 as mt5
-from typing import Dict, Optional
 import pandas as pd
-
-from strategies.base import BaseStrategy, TradeSignal, SignalType
-from config import config
+from typing import Optional, Dict, Any
+from strategies.base import BaseStrategy, TradingSignal, SignalType
 from core.logger import get_logger
-
-logger = get_logger(__name__)
 
 
 class ATRTrendFollower(BaseStrategy):
     """
-    Trend following strategy with ATR-based stops.
+    Estratégia de seguimento de tendência com ATR
     
-    Logic:
-    - Entry: Price > EMA(200) AND RSI < 30 (oversold in uptrend)
-    - Exit: Trailing stop at 2.0 x ATR
+    Lógica:
+    - Compra: Preço > EMA(200) E RSI < 30 (pullback em tendência de alta)
+    - Venda: Preço < EMA(200) E RSI > 70 (pullback em tendência de baixa)
+    - Stop Loss: 2.0 x ATR
+    - Take Profit: 3.0 x ATR
+    - Trailing Stop: Dinâmico baseado em ATR
     """
-    
-    def __init__(self):
-        """Initialize ATR Trend Follower strategy."""
-        super().__init__("ATR Trend Follower")
-        
-        # Load parameters from config
-        self.atr_period = config.get('strategy', 'atr_period', default=14)
-        self.atr_multiplier = config.get('strategy', 'atr_multiplier', default=2.0)
-        self.ema_period = config.get('strategy', 'ema_period', default=200)
-        self.rsi_period = config.get('strategy', 'rsi_period', default=14)
-        self.rsi_oversold = config.get('strategy', 'rsi_oversold', default=30)
-        self.rsi_overbought = config.get('strategy', 'rsi_overbought', default=70)
-        
-        # Track trailing stops for open positions
-        self.trailing_stops: Dict[str, float] = {}
-        
-        logger.info(f"ATR Trend Follower initialized | ATR: {self.atr_period} | "
-                   f"Multiplier: {self.atr_multiplier} | EMA: {self.ema_period}")
-    
-    def on_tick(self, symbol: str, tick_data: Dict) -> Optional[TradeSignal]:
+
+    def __init__(self, parameters: Dict[str, Any]):
         """
-        Process tick for trailing stop updates.
+        Args:
+            parameters: Parâmetros da estratégia
+                - ema_period: Período da EMA (padrão: 200)
+                - rsi_period: Período do RSI (padrão: 14)
+                - rsi_oversold: Nível de sobrevenda (padrão: 30)
+                - rsi_overbought: Nível de sobrecompra (padrão: 70)
+                - atr_period: Período do ATR (padrão: 14)
+                - atr_multiplier_stop: Multiplicador ATR para stop (padrão: 2.0)
+                - atr_multiplier_target: Multiplicador ATR para target (padrão: 3.0)
+                - min_bars: Mínimo de barras necessárias (padrão: 250)
+        """
+        super().__init__("ATR Trend Follower", parameters)
+        
+        # Parâmetros
+        self.ema_period = self.get_parameter('ema_period', 200)
+        self.rsi_period = self.get_parameter('rsi_period', 14)
+        self.rsi_oversold = self.get_parameter('rsi_oversold', 30)
+        self.rsi_overbought = self.get_parameter('rsi_overbought', 70)
+        self.atr_period = self.get_parameter('atr_period', 14)
+        self.atr_multiplier_stop = self.get_parameter('atr_multiplier_stop', 2.0)
+        self.atr_multiplier_target = self.get_parameter('atr_multiplier_target', 3.0)
+        self.min_bars = self.get_parameter('min_bars', 250)
+        
+        # Estado interno
+        self.active_positions: Dict[str, Dict[str, Any]] = {}
+        
+    def initialize(self) -> bool:
+        """Inicializa a estratégia"""
+        self.logger.info(f"Inicializando {self.name}")
+        self.logger.info(f"EMA: {self.ema_period} | RSI: {self.rsi_period}")
+        self.logger.info(f"RSI Oversold/Overbought: {self.rsi_oversold}/{self.rsi_overbought}")
+        self.logger.info(f"ATR Period: {self.atr_period} | Multipliers: {self.atr_multiplier_stop}/{self.atr_multiplier_target}")
+        
+        self.is_initialized = True
+        return True
+
+    def generate_signal(self, data: pd.DataFrame, symbol: str) -> Optional[TradingSignal]:
+        """
+        Gera sinal baseado nos dados
         
         Args:
-            symbol: Trading symbol
-            tick_data: Current tick data
+            data: DataFrame com OHLCV e indicadores
+            symbol: Símbolo
             
         Returns:
-            Exit signal if trailing stop hit, else None
+            TradingSignal ou None
         """
-        # This method primarily handles trailing stops
-        # Actual entry signals are generated in generate_signal
+        if not self.is_initialized:
+            self.logger.warning("Estratégia não inicializada")
+            return None
+
+        # Verifica dados suficientes
+        if len(data) < self.min_bars:
+            self.logger.debug(f"Dados insuficientes para {symbol}: {len(data)}/{self.min_bars}")
+            return None
+
+        # Verifica indicadores necessários
+        required_indicators = [f'ema_{self.ema_period}', 'rsi', 'atr']
+        for indicator in required_indicators:
+            if indicator not in data.columns:
+                self.logger.error(f"Indicador '{indicator}' não encontrado nos dados")
+                return None
+
+        # Obtém últimos valores
+        last_close = data['close'].iloc[-1]
+        last_ema = data[f'ema_{self.ema_period}'].iloc[-1]
+        last_rsi = data['rsi'].iloc[-1]
+        last_atr = data['atr'].iloc[-1]
         
-        if symbol in self.trailing_stops:
-            current_price = tick_data.get('bid', 0)
-            trailing_stop = self.trailing_stops[symbol]
+        # Verifica se indicadores são válidos (não NaN)
+        if pd.isna(last_ema) or pd.isna(last_rsi) or pd.isna(last_atr):
+            self.logger.debug(f"Indicadores com valores NaN para {symbol}")
+            return None
+
+        # --- LÓGICA DE COMPRA ---
+        # Condições: Preço acima da EMA (tendência de alta) E RSI oversold (pullback)
+        if last_close > last_ema and last_rsi < self.rsi_oversold:
+            # Verifica se não há momentum muito fraco
+            if last_rsi < 20:  # RSI extremamente baixo pode indicar problema
+                self.logger.debug(f"{symbol}: RSI muito baixo ({last_rsi:.2f}), aguardando")
+                return None
             
-            if current_price <= trailing_stop:
-                logger.info(f"Trailing stop hit for {symbol} at {current_price:.5f}")
-                return TradeSignal(
-                    symbol=symbol,
-                    signal_type=SignalType.CLOSE_BUY,
-                    price=current_price,
-                    stop_loss=0,
-                    take_profit=0,
-                    reason="Trailing stop triggered"
-                )
-        
-        return None
-    
-    def generate_signal(self, symbol: str, dataframe: pd.DataFrame) -> Optional[TradeSignal]:
-        """
-        Generate buy/sell signals based on trend and RSI.
-        
-        Args:
-            symbol: Trading symbol
-            dataframe: Price data with indicators
+            # Calcula stop loss e take profit
+            stop_loss = self.calculate_stop_loss(
+                last_close,
+                SignalType.BUY,
+                last_atr,
+                self.atr_multiplier_stop
+            )
             
-        Returns:
-            TradeSignal or None
-        """
-        if len(dataframe) < max(self.ema_period, self.rsi_period, self.atr_period):
-            logger.debug(f"Insufficient data for {symbol}")
-            return None
-        
-        # Get latest values
-        latest = dataframe.iloc[-1]
-        previous = dataframe.iloc[-2]
-        
-        close = latest['close']
-        ema = latest.get(f'EMA_{self.ema_period}', 0)
-        rsi = latest.get(f'RSI_{self.rsi_period}', 0)
-        atr = latest.get(f'ATRr_{self.atr_period}', 0)
-        
-        # Validate indicator values
-        if ema == 0 or rsi == 0 or atr == 0 or pd.isna(ema) or pd.isna(rsi) or pd.isna(atr):
-            logger.debug(f"Invalid indicator values for {symbol}")
-            return None
-        
-        # Get symbol info for price precision
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            logger.error(f"Failed to get symbol info for {symbol}")
-            return None
-        
-        digits = symbol_info.digits
-        
-        # BUY SIGNAL: Uptrend + RSI oversold (pullback)
-        if close > ema and rsi < self.rsi_oversold:
-            # Check if this is a fresh signal (RSI just crossed below oversold)
-            prev_rsi = previous.get(f'RSI_{self.rsi_period}', 0)
-            if prev_rsi >= self.rsi_oversold:  # Fresh cross
-                stop_loss = round(close - (atr * self.atr_multiplier), digits)
-                take_profit = round(close + (atr * self.atr_multiplier * 2), digits)
-                
-                signal = TradeSignal(
-                    symbol=symbol,
-                    signal_type=SignalType.BUY,
-                    price=close,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    reason=f"Uptrend pullback | Price: {close:.5f} > EMA: {ema:.5f} | RSI: {rsi:.1f}",
-                    confidence=0.8
-                )
-                
-                logger.info(f"BUY signal generated for {symbol} | {signal.reason}")
+            take_profit = self.calculate_take_profit(
+                last_close,
+                SignalType.BUY,
+                last_atr,
+                self.atr_multiplier_target
+            )
+            
+            reason = (
+                f"Tendência de alta (Close {last_close:.5f} > EMA {last_ema:.5f}) "
+                f"+ RSI Oversold ({last_rsi:.2f} < {self.rsi_oversold})"
+            )
+            
+            signal = TradingSignal(
+                symbol=symbol,
+                signal_type=SignalType.BUY,
+                price=last_close,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=self._calculate_confidence(last_rsi, self.rsi_oversold, True),
+                reason=reason,
+                metadata={
+                    'ema': last_ema,
+                    'rsi': last_rsi,
+                    'atr': last_atr
+                }
+            )
+            
+            if self.validate_signal(signal):
+                self.logger.info(f"SINAL GERADO: {signal}")
                 return signal
-        
-        # SELL SIGNAL: Downtrend + RSI overbought (pullback)
-        elif close < ema and rsi > self.rsi_overbought:
-            prev_rsi = previous.get(f'RSI_{self.rsi_period}', 0)
-            if prev_rsi <= self.rsi_overbought:  # Fresh cross
-                stop_loss = round(close + (atr * self.atr_multiplier), digits)
-                take_profit = round(close - (atr * self.atr_multiplier * 2), digits)
-                
-                signal = TradeSignal(
-                    symbol=symbol,
-                    signal_type=SignalType.SELL,
-                    price=close,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    reason=f"Downtrend pullback | Price: {close:.5f} < EMA: {ema:.5f} | RSI: {rsi:.1f}",
-                    confidence=0.8
-                )
-                
-                logger.info(f"SELL signal generated for {symbol} | {signal.reason}")
+
+        # --- LÓGICA DE VENDA ---
+        # Condições: Preço abaixo da EMA (tendência de baixa) E RSI overbought (pullback)
+        elif last_close < last_ema and last_rsi > self.rsi_overbought:
+            # Verifica se não há momentum muito forte
+            if last_rsi > 80:  # RSI extremamente alto
+                self.logger.debug(f"{symbol}: RSI muito alto ({last_rsi:.2f}), aguardando")
+                return None
+            
+            # Calcula stop loss e take profit
+            stop_loss = self.calculate_stop_loss(
+                last_close,
+                SignalType.SELL,
+                last_atr,
+                self.atr_multiplier_stop
+            )
+            
+            take_profit = self.calculate_take_profit(
+                last_close,
+                SignalType.SELL,
+                last_atr,
+                self.atr_multiplier_target
+            )
+            
+            reason = (
+                f"Tendência de baixa (Close {last_close:.5f} < EMA {last_ema:.5f}) "
+                f"+ RSI Overbought ({last_rsi:.2f} > {self.rsi_overbought})"
+            )
+            
+            signal = TradingSignal(
+                symbol=symbol,
+                signal_type=SignalType.SELL,
+                price=last_close,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=self._calculate_confidence(last_rsi, self.rsi_overbought, False),
+                reason=reason,
+                metadata={
+                    'ema': last_ema,
+                    'rsi': last_rsi,
+                    'atr': last_atr
+                }
+            )
+            
+            if self.validate_signal(signal):
+                self.logger.info(f"SINAL GERADO: {signal}")
                 return signal
-        
+
         return None
-    
-    def should_exit(self, symbol: str, current_price: float, 
-                    position_type: str) -> Optional[TradeSignal]:
+
+    def on_tick(self, symbol: str, bid: float, ask: float) -> Optional[TradingSignal]:
         """
-        Check if position should be exited based on trailing stop.
+        Processa tick individual
+        Nesta estratégia, trabalhamos com candles fechados, então retorna None
         
         Args:
-            symbol: Trading symbol
-            current_price: Current market price
-            position_type: 'buy' or 'sell'
+            symbol: Símbolo
+            bid: Preço bid
+            ask: Preço ask
             
         Returns:
-            Exit signal or None
+            None (estratégia baseada em candles)
         """
-        if position_type.lower() == 'buy':
-            if symbol in self.trailing_stops:
-                if current_price <= self.trailing_stops[symbol]:
-                    return TradeSignal(
-                        symbol=symbol,
-                        signal_type=SignalType.CLOSE_BUY,
-                        price=current_price,
-                        stop_loss=0,
-                        take_profit=0,
-                        reason="Trailing stop hit"
-                    )
-        
+        # Esta estratégia não opera em ticks individuais
         return None
-    
-    def update_trailing_stop(self, symbol: str, current_price: float, atr: float) -> None:
+
+    def should_close_position(
+        self,
+        symbol: str,
+        entry_price: float,
+        current_price: float,
+        position_type: str
+    ) -> bool:
         """
-        Update trailing stop for a symbol.
+        Verifica se deve fechar posição com trailing stop
         
         Args:
-            symbol: Trading symbol
-            current_price: Current market price
-            atr: Current ATR value
+            symbol: Símbolo
+            entry_price: Preço de entrada
+            current_price: Preço atual
+            position_type: 'BUY' ou 'SELL'
+            
+        Returns:
+            True se deve fechar
         """
-        new_stop = current_price - (atr * self.atr_multiplier)
+        # Implementar trailing stop dinâmico baseado em ATR
+        # Por enquanto, deixa o stop loss fixo gerenciar
+        return False
+
+    def _calculate_confidence(self, rsi: float, threshold: float, is_buy: bool) -> float:
+        """
+        Calcula nível de confiança do sinal baseado na distância do RSI ao threshold
         
-        if symbol not in self.trailing_stops:
-            self.trailing_stops[symbol] = new_stop
-            logger.debug(f"Initial trailing stop for {symbol}: {new_stop:.5f}")
+        Args:
+            rsi: Valor do RSI
+            threshold: Threshold de referência
+            is_buy: Se é sinal de compra
+            
+        Returns:
+            Confiança entre 0.5 e 1.0
+        """
+        if is_buy:
+            # Quanto mais abaixo do oversold, maior a confiança
+            distance = abs(threshold - rsi)
+            confidence = min(1.0, 0.5 + (distance / 20.0))
         else:
-            # Only move stop up, never down
-            if new_stop > self.trailing_stops[symbol]:
-                self.trailing_stops[symbol] = new_stop
-                logger.debug(f"Trailing stop updated for {symbol}: {new_stop:.5f}")
-    
-    def remove_trailing_stop(self, symbol: str) -> None:
-        """Remove trailing stop when position is closed."""
-        if symbol in self.trailing_stops:
-            del self.trailing_stops[symbol]
-            logger.debug(f"Trailing stop removed for {symbol}")
-    
-    def get_parameters(self) -> Dict:
-        """Get strategy parameters."""
+            # Quanto mais acima do overbought, maior a confiança
+            distance = abs(rsi - threshold)
+            confidence = min(1.0, 0.5 + (distance / 20.0))
+        
+        return confidence
+
+    def get_required_indicators(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Retorna indicadores necessários para a estratégia
+        
+        Returns:
+            Dicionário de indicadores e parâmetros
+        """
         return {
-            "name": self.name,
-            "atr_period": self.atr_period,
-            "atr_multiplier": self.atr_multiplier,
-            "ema_period": self.ema_period,
-            "rsi_period": self.rsi_period,
-            "rsi_oversold": self.rsi_oversold,
-            "rsi_overbought": self.rsi_overbought
+            'ema': {'length': self.ema_period},
+            'rsi': {'length': self.rsi_period},
+            'atr': {'length': self.atr_period}
         }

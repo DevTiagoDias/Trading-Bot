@@ -1,57 +1,71 @@
-# Robô de Trading Profissional MT5/Python
+# 🤖 Trading Bot MT5/Python - Professional
 
-Sistema completo de trading algorítmico para MetaTrader 5, desenvolvido com arquitetura modular e orientada a objetos.
+Sistema completo de trading algorítmico para MetaTrader 5, desenvolvido com arquitetura modular, orientação a objetos e foco em gestão de risco profissional.
 
-## 🎯 Características
+## 📋 Características Principais
 
-- **Arquitetura Modular**: Separação clara de responsabilidades (dados, estratégia, execução, risco)
-- **Padrão Singleton**: Conexão única e gerenciada com MT5
-- **Retry Inteligente**: Reconexão automática em falhas transientes
-- **Gestão de Risco Avançada**: Cálculo dinâmico de lotes, circuit breaker, drawdown protection
-- **Buffer Circular**: Gerenciamento eficiente de memória para dados históricos
-- **Indicadores Técnicos**: Integração com pandas_ta (RSI, EMA, ATR)
-- **Tratamento de Erros**: Handling granular de códigos MT5 (requote, invalid fill, etc.)
-- **Trailing Stops**: Stops dinâmicos baseados em ATR
-- **Logging Profissional**: Logs rotativos com níveis distintos
-- **Notificações**: Alertas via Telegram
+### ✅ Arquitetura Profissional
+- **Modular**: Código organizado em módulos claros e independentes
+- **Orientado a Objetos**: Uso de classes, herança e composição
+- **Type Hinting**: Tipagem estática em todas as funções
+- **Production-Ready**: Pronto para ambiente de produção
 
-## 📁 Estrutura do Projeto
+### 🛡️ Gestão de Risco Avançada
+- **Cálculo Dinâmico de Posição**: Baseado em risco monetário e ATR
+- **Circuit Breaker**: Bloqueio automático ao atingir drawdown diário
+- **Validação Pré-Execução**: Todas as ordens validadas antes de envio
+- **Tick Value Real-Time**: Suporta pares cruzados e índices corretamente
+
+### 🔄 Conectividade Robusta
+- **Padrão Singleton**: Uma única conexão MT5
+- **Retry Logic Inteligente**: Reconexão automática em falhas transientes
+- **Tratamento de Erros**: Códigos de erro MT5 tratados individualmente
+- **Requote Handling**: Retentativa automática com novo preço
+
+### 📊 Pipeline de Dados Eficiente
+- **Buffer Circular**: Rolling window de 1000 candles
+- **Indicadores Técnicos**: Integração com pandas_ta
+- **Atualização Incremental**: Evita recálculo desnecessário
+
+### 📈 Motor de Estratégia Extensível
+- **Classe Base Abstrata**: Interface padronizada para estratégias
+- **Estratégia Exemplo**: ATR Trend Follower implementada
+- **Fácil Extensão**: Adicione novas estratégias facilmente
+
+### 📝 Sistema de Logging Profissional
+- **Rotativo**: Logs com rotação automática
+- **Níveis Distintos**: INFO, WARNING, ERROR com contexto
+- **Logs Especializados**: Trade logs, signal logs, risk logs
+
+## 🏗️ Estrutura do Projeto
 
 ```
 trading_bot/
 ├── config/
-│   ├── __init__.py          # Carregador de configurações
-│   └── settings.json        # Arquivo de configurações
+│   └── settings.json          # Configurações centralizadas
 ├── core/
-│   ├── __init__.py
-│   ├── logger.py            # Sistema de logging
-│   └── mt5_interface.py     # Interface MT5 com Singleton
+│   ├── logger.py             # Sistema de logging
+│   └── mt5_interface.py      # Interface MT5 (Singleton + Retry)
 ├── data/
-│   ├── __init__.py
-│   └── data_feed.py         # Handler de dados de mercado
+│   └── data_feed.py          # Market data handler (Buffer Circular)
 ├── strategies/
-│   ├── __init__.py
-│   ├── base.py              # Classe abstrata base
-│   └── atr_trend_follower.py # Estratégia concreta
+│   ├── base.py               # Classe abstrata base
+│   └── atr_trend_follower.py # Estratégia ATR Trend Follower
 ├── execution/
-│   ├── __init__.py
-│   └── order_manager.py     # Gestor de ordens
+│   └── order_manager.py      # Gestor de ordens
 ├── risk/
-│   ├── __init__.py
-│   └── risk_manager.py      # Gestor de risco
+│   └── risk_manager.py       # Gestor de risco (CRÍTICO)
 ├── utils/
-│   ├── __init__.py
-│   └── notifications.py     # Sistema de notificações
-├── main.py                  # Orquestrador principal
-└── requirements.txt
+│   └── config.py             # Utilitário de configuração
+├── main.py                   # Orquestrador principal
+└── requirements.txt          # Dependências
 ```
 
 ## 🚀 Instalação
 
 ### 1. Pré-requisitos
-
-- Python 3.9 ou superior
-- MetaTrader 5 instalado e configurado
+- Python 3.8 ou superior
+- MetaTrader 5 instalado
 - Conta demo ou real no MT5
 
 ### 2. Instalar Dependências
@@ -60,174 +74,246 @@ trading_bot/
 pip install -r requirements.txt
 ```
 
-### 3. Configurar o Bot
+### 3. Configurar settings.json
 
-Edite o arquivo `config/settings.json`:
+Edite `config/settings.json` com suas credenciais:
 
 ```json
 {
   "mt5": {
-    "login": 12345678,          # Seu login MT5
-    "password": "sua_senha",     # Sua senha
-    "server": "MetaQuotes-Demo", # Servidor MT5
-    "path": ""                   # Deixe vazio para auto-detect
-  },
-  "trading": {
-    "symbols": ["EURUSD", "GBPUSD"],
-    "timeframe": "M15",
-    "max_positions": 3
-  },
-  "risk": {
-    "risk_per_trade_percent": 1.0,    # Risco por trade
-    "max_daily_drawdown_percent": 3.0 # Limite de DD diário
+    "login": 12345678,
+    "password": "sua_senha",
+    "server": "MetaQuotes-Demo"
   }
 }
 ```
 
-### 4. Habilitar AlgoTrading no MT5
+## ⚙️ Configuração
 
-1. Abra o MetaTrader 5
-2. Ferramentas → Opções → Expert Advisors
-3. ✅ Ative "Permitir negociação algorítmica/automatizada"
+### Parâmetros de Risco (Críticos)
 
-## 🎮 Como Usar
+```json
+{
+  "risk": {
+    "risk_percent_per_trade": 1.0,      // Risco por operação (% do saldo)
+    "max_daily_drawdown_percent": 3.0,  // Drawdown máximo diário
+    "max_position_size": 1.0,           // Tamanho máximo (lotes)
+    "min_position_size": 0.01,          // Tamanho mínimo (lotes)
+    "use_dynamic_sizing": true          // Ajuste baseado em volatilidade
+  }
+}
+```
 
-### Executar o Bot
+### Parâmetros da Estratégia
+
+```json
+{
+  "strategy": {
+    "atr_trend_follower": {
+      "ema_period": 200,              // Período da EMA
+      "rsi_period": 14,               // Período do RSI
+      "rsi_oversold": 30,             // Nível de sobrevenda
+      "rsi_overbought": 70,           // Nível de sobrecompra
+      "atr_period": 14,               // Período do ATR
+      "atr_multiplier_stop": 2.0,     // Multiplicador ATR para stop
+      "atr_multiplier_target": 3.0    // Multiplicador ATR para target
+    }
+  }
+}
+```
+
+## 🎯 Uso
+
+### Modo Normal
 
 ```bash
 python main.py
 ```
 
-### Parar o Bot
+### Com Configuração Customizada
 
-- Pressione `Ctrl+C` para shutdown gracioso
-- O bot fechará todas as posições se `close_all_eod: true`
+```python
+from main import TradingBot
 
-## 📊 Estratégia Implementada: ATR Trend Follower
+bot = TradingBot(config_path="minha_config.json")
+bot.initialize()
+bot.run()
+```
 
-### Lógica de Entrada
+## 📊 Lógica da Estratégia ATR Trend Follower
 
-**Compra (BUY)**:
-- Preço > EMA(200) → Tendência de alta
-- RSI < 30 → Pullback (sobrevenda)
-- Stop Loss: Preço - (2.0 × ATR)
-- Take Profit: Preço + (4.0 × ATR)
+### Condições de Compra (BUY)
+```
+✓ Preço > EMA(200)  [Tendência de alta]
+✓ RSI < 30          [Pullback/sobrevenda]
+→ Stop Loss: Preço - (2.0 × ATR)
+→ Take Profit: Preço + (3.0 × ATR)
+```
 
-**Venda (SELL)**:
-- Preço < EMA(200) → Tendência de baixa
-- RSI > 70 → Pullback (sobrecompra)
-- Stop Loss: Preço + (2.0 × ATR)
-- Take Profit: Preço - (4.0 × ATR)
+### Condições de Venda (SELL)
+```
+✓ Preço < EMA(200)  [Tendência de baixa]
+✓ RSI > 70          [Pullback/sobrecompra]
+→ Stop Loss: Preço + (2.0 × ATR)
+→ Take Profit: Preço - (3.0 × ATR)
+```
 
-### Saída
+## 🛡️ Sistema de Gestão de Risco
 
-- **Trailing Stop**: 2.0 × ATR, ajustado dinamicamente
-- Stop só sobe, nunca desce (para compras)
-
-## 🛡️ Gestão de Risco
-
-### Cálculo de Lote
+### Cálculo de Posição
 
 ```
-Lote = (Saldo × Risco%) / (Distância_SL_Pontos × Valor_do_Tick)
+Lotes = (Saldo × Risco%) / (Distância_SL_Pontos × Valor_do_Ponto)
 ```
+
+**Exemplo:**
+- Saldo: $10,000
+- Risco: 1% = $100
+- Stop Loss: 50 pontos
+- Valor do Ponto: $1
+- **Resultado: 2.0 lotes**
 
 ### Circuit Breaker
 
-- Ativa automaticamente se drawdown diário ≥ 3%
-- Bloqueia novas operações até o próximo dia
-- Envia alerta via Telegram
-
-### Validações Pré-Trade
-
-- ✓ Margem livre > 20%
-- ✓ Spread < 20 pontos
-- ✓ Máximo de 3 posições simultâneas
-- ✓ Horário de trading (8h-22h)
+Quando o drawdown diário atinge **3%**:
+- ❌ Todas as novas operações são BLOQUEADAS
+- ⚠️ Sistema entra em modo de proteção
+- ✅ Reativa automaticamente no próximo dia
 
 ## 📝 Logs
 
-Os logs são salvos em `logs/trading_bot.log` com rotação automática:
+Os logs são salvos em `logs/` com rotação automática:
 
 ```
-2026-01-29 14:23:45 | INFO     | BUY EURUSD | Lot: 0.10 | Price: 1.08450
-2026-01-29 14:25:12 | INFO     | Position closed | EURUSD | Profit: $12.50
-2026-01-29 15:01:03 | ERROR    | CIRCUIT BREAKER | Drawdown: 3.2%
+logs/
+├── trading_bot_20241216.log
+├── trading_bot_20241216.log.1
+└── trading_bot_20241216.log.2
 ```
 
-## 🔔 Notificações (Telegram)
+### Tipos de Log
 
-### Configurar
+- **TRADE**: Ordens executadas
+- **SIGNAL**: Sinais gerados
+- **RISK**: Eventos de gestão de risco
+- **ERROR**: Erros e exceções
 
-1. Crie um bot no Telegram via [@BotFather](https://t.me/botfather)
-2. Obtenha o token do bot
-3. Obtenha seu chat_id via [@userinfobot](https://t.me/userinfobot)
-4. Configure no `settings.json`:
+## 🔧 Tratamento de Erros MT5
 
-```json
-"notifications": {
-  "telegram_enabled": true,
-  "telegram_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-  "telegram_chat_id": "987654321"
-}
-```
+### Erros Tratados Automaticamente
 
-## 🧪 Testes
+| Código | Erro | Ação |
+|--------|------|------|
+| 10004 | Requote | Retenta com novo preço |
+| 10030 | Fill inválido | Tenta tipo alternativo |
+| -10005 | Connection lost | Reconecta automaticamente |
 
-Execute em conta **DEMO** primeiro:
+### Erros Que Bloqueiam Execução
 
-1. Configure uma conta demo no MT5
-2. Ajuste `risk_per_trade_percent: 0.5` para testes conservadores
-3. Execute por 1 semana para validar
-4. Analise os logs em `logs/`
+| Código | Erro | Resultado |
+|--------|------|-----------|
+| 10018 | Mercado fechado | Aguarda abertura |
+| 10019 | Sem saldo | Bloqueia trading |
+| 10017 | Trading desabilitado | Alerta usuário |
 
-## ⚠️ Avisos Importantes
-
-- ⚠️ **USE POR SUA CONTA E RISCO**
-- ⚠️ Sempre teste em conta DEMO primeiro
-- ⚠️ O desempenho passado não garante resultados futuros
-- ⚠️ Nunca arrisque mais do que pode perder
-- ⚠️ Monitore o bot regularmente
-
-## 🔧 Personalização
+## 🔌 Extensibilidade
 
 ### Criar Nova Estratégia
 
-1. Herde de `BaseStrategy` em `strategies/base.py`
-2. Implemente `generate_signal()` e `on_tick()`
-3. Registre no `main.py`
-
-Exemplo:
-
 ```python
-from strategies.base import BaseStrategy, TradeSignal, SignalType
+from strategies.base import BaseStrategy, TradingSignal, SignalType
 
 class MinhaEstrategia(BaseStrategy):
-    def __init__(self):
-        super().__init__("Minha Estratégia")
+    def __init__(self, parameters):
+        super().__init__("Minha Estratégia", parameters)
     
-    def generate_signal(self, symbol, dataframe):
-        # Sua lógica aqui
-        pass
+    def initialize(self) -> bool:
+        # Lógica de inicialização
+        return True
     
-    def on_tick(self, symbol, tick_data):
-        # Processamento de tick
-        pass
+    def generate_signal(self, data, symbol) -> Optional[TradingSignal]:
+        # Lógica da estratégia
+        if condicao_compra:
+            return TradingSignal(
+                symbol=symbol,
+                signal_type=SignalType.BUY,
+                price=preco,
+                stop_loss=sl,
+                take_profit=tp
+            )
+        return None
+    
+    def on_tick(self, symbol, bid, ask):
+        return None
+    
+    def should_close_position(self, symbol, entry_price, current_price, position_type):
+        return False
 ```
 
-## 📞 Suporte
+## ⚠️ Avisos Importantes
 
-- Logs detalhados em `logs/trading_bot.log`
-- Códigos de erro MT5: [Documentação Oficial](https://www.mql5.com/en/docs/constants/errorswarnings/enum_trade_return_codes)
+### ⚡ NUNCA em Produção Sem Teste
 
-## 📜 Licença
+1. **Sempre teste em conta DEMO primeiro**
+2. **Ajuste os parâmetros de risco para seu perfil**
+3. **Monitore os primeiros dias de operação**
+4. **Tenha um plano de contingência**
 
-Este código é fornecido "como está" para fins educacionais. O autor não se responsabiliza por perdas financeiras.
+### 🔐 Segurança
+
+- **Não compartilhe** seu `settings.json` com credenciais
+- **Use senhas fortes** na conta MT5
+- **Monitore** as operações regularmente
+- **Backup** dos logs e configurações
+
+## 📚 Documentação Adicional
+
+### Ordem de Execução
+
+1. **Carrega configuração** → `config/settings.json`
+2. **Conecta ao MT5** → `MT5Client.connect()`
+3. **Inicializa buffers** → `MarketDataHandler.initialize_buffers()`
+4. **Setup estratégia** → `ATRTrendFollower.initialize()`
+5. **Inicia loop** → `TradingBot.run()`
+
+### Loop Principal
+
+```
+Loop Infinito (a cada 60s):
+├── Verifica reset diário
+├── Verifica conexão MT5
+├── Atualiza dados de mercado
+├── Para cada símbolo:
+│   ├── Calcula indicadores
+│   ├── Gera sinal
+│   ├── Valida risco
+│   ├── Calcula tamanho
+│   └── Executa ordem
+└── Log status a cada 5min
+```
+
+## 🤝 Contribuindo
+
+Para adicionar funcionalidades:
+1. Mantenha a estrutura modular
+2. Use type hinting
+3. Documente com docstrings
+4. Teste em ambiente demo
+
+## 📄 Licença
+
+Este código é fornecido como exemplo educacional. Use por sua conta e risco.
+
+## ⚖️ Disclaimer
+
+**TRADING ENVOLVE RISCO DE PERDA FINANCEIRA**
+
+- Este software é fornecido "como está"
+- Não há garantia de lucros
+- Pode resultar em perdas significativas
+- Teste extensivamente antes de usar capital real
+- O autor não se responsabiliza por perdas
 
 ---
 
-**Desenvolvido com foco em:**
-- Segurança do capital
-- Robustez operacional
-- Código limpo e manutenível
-- Extensibilidade
+**Desenvolvido com foco em segurança, modularidade e gestão profissional de risco.**

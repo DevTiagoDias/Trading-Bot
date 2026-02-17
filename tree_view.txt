@@ -1,0 +1,158 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║              ARQUITETURA COMPLETA - TRADING BOT INSTITUCIONAL              ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+trading_bot/                                 📦 Raiz do Projeto
+│
+├── 📁 config/                               ⚙️ CONFIGURAÇÕES
+│   ├── settings.json                        ← EDITAR: Suas credenciais MT5
+│   └── settings_conservative.json           ← Template conservador
+│
+├── 📁 core/                                 🔧 NÚCLEO DO SISTEMA
+│   ├── __init__.py                          ← API: MT5Client, get_logger, decorators
+│   ├── decorators.py                        ← @singleton, @retry_with_backoff
+│   ├── logger.py                            ← Logging rotativo
+│   └── mt5_client.py                        ← Cliente MT5 singleton
+│
+├── 📁 data/                                 📊 FEATURES QUANTITATIVAS
+│   ├── __init__.py                          ← API: FeatureEngine, CUSUMFilter
+│   └── features.py                          ← EMA, RSI, ATR, CUSUM, Labels
+│
+├── 📁 strategies/                           🤖 INTELIGÊNCIA ARTIFICIAL
+│   ├── __init__.py                          ← API: PrimaryStrategy, MetaLabeler
+│   └── ai_logic.py                          ← Estratégia + RandomForest
+│
+├── 📁 execution/                            💼 EXECUÇÃO DE ORDENS
+│   ├── __init__.py                          ← API: OrderManager
+│   └── order_manager.py                     ← ECN/STP (trata erros MT5)
+│
+├── 📁 risk/                                 🛡️ GESTÃO DE RISCO
+│   ├── __init__.py                          ← API: KellyRiskManager
+│   └── manager.py                           ← Kelly + Position Sizing
+│
+├── 📁 models/                               🧠 MACHINE LEARNING
+│   └── meta_classifier.pkl                  ← RandomForest (gerado)
+│
+├── 📁 logs/                                 📝 AUDITORIA
+│   ├── trading_bot.log                      ← Log atual
+│   ├── trading_bot.log.1                    ← Backup 1
+│   └── ... (até .5)                         ← Backups rotativos
+│
+├── 📄 main.py                               ⭐ ORQUESTRADOR PRINCIPAL
+├── 📄 train_model.py                        🎓 Treina meta-modelo
+├── 📄 diagnostic.py                         🔍 Valida sistema
+│
+├── 📄 requirements.txt                      📦 Dependências
+├── 📄 .gitignore                            🚫 Git ignore
+│
+└── 📚 DOCUMENTAÇÃO/
+    ├── README.md                            📖 Manual completo
+    ├── QUICKSTART.md                        ⚡ Início em 5 min
+    ├── ARCHITECTURE.md                      🏗️ Visão técnica
+    ├── BEST_PRACTICES.md                    ✅ Boas práticas
+    └── PROJECT_STRUCTURE.md                 📂 Este arquivo
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                          PRINCIPAIS ARQUIVOS                               ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+EXECUTÁVEIS:
+  python main.py          → Inicia o robô de trading
+  python train_model.py   → Treina o meta-modelo ML
+  python diagnostic.py    → Valida instalação e conexão
+
+CONFIGURAÇÃO:
+  config/settings.json    → Credenciais MT5 e parâmetros
+
+SAÍDAS GERADAS:
+  models/*.pkl            → Modelos treinados
+  logs/*.log              → Logs rotativos
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                      IMPORTS APÓS __init__.py POPULADOS                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+# Antes (verboso):
+from core.mt5_client import MT5Client
+from core.logger import get_logger
+
+# Agora (limpo):
+from core import MT5Client, get_logger
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                          ESTATÍSTICAS DO PROJETO                           ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Total de Arquivos Python:    13 módulos
+Total de Linhas de Código:   ~3.900 linhas
+Documentação:                4 arquivos .md
+Testes de Validação:         1 script (diagnostic.py)
+Scripts Utilitários:         2 (train_model.py, diagnostic.py)
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                             MÓDULOS POR FUNÇÃO                             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+INFRAESTRUTURA (core/)                ~800 linhas
+├─ Conexão MT5 singleton
+├─ Retry com backoff exponencial
+└─ Sistema de logging profissional
+
+DADOS (data/)                         ~600 linhas
+├─ Indicadores técnicos (EMA, RSI, ATR)
+├─ Filtro CUSUM para regime shifts
+└─ Features para Machine Learning
+
+ESTRATÉGIA (strategies/)              ~700 linhas
+├─ Estratégia primária (EMA + RSI)
+├─ Meta-labeling com RandomForest
+└─ Orquestração da IA
+
+EXECUÇÃO (execution/)                 ~500 linhas
+├─ Envio de ordens ECN/STP
+├─ Tratamento de erros MT5
+└─ Gestão de posições
+
+RISCO (risk/)                         ~400 linhas
+├─ Critério de Kelly fracionário
+├─ Dimensionamento de posição
+└─ Validação multi-camada
+
+ORQUESTRADOR (main.py)                ~400 linhas
+└─ Loop assíncrono principal
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                          FLUXO DE EXECUÇÃO                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+1. python main.py
+   ↓
+2. Carrega config/settings.json
+   ↓
+3. Inicializa componentes (MT5, Features, AI, Risk, Execution)
+   ↓
+4. Loop assíncrono:
+   ├─ Obtém dados históricos
+   ├─ Calcula features
+   ├─ CUSUM detecta evento?
+   │  ├─ SIM → Gera sinal primário
+   │  │         ↓
+   │  │       Meta-modelo aprova?
+   │  │         ├─ SIM → Calcula position size (Kelly)
+   │  │         │         ↓
+   │  │         │       Valida risco?
+   │  │         │         ├─ SIM → Executa ordem
+   │  │         │         └─ NÃO → Skip
+   │  │         └─ NÃO → Skip
+   │  └─ NÃO → Skip
+   └─ await asyncio.sleep(interval)
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    PRONTO PARA PRODUÇÃO! 🚀                                ║
+╚════════════════════════════════════════════════════════════════════════════╝

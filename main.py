@@ -1,342 +1,451 @@
 """
-Trading Bot Main - Orquestrador Principal
-Coordena todos os componentes do sistema de trading
+Orquestrador Principal do Sistema de Trading Institucional.
+
+Integra todos os componentes:
+- Conexão MT5
+- Análise de dados
+- Estratégia primária
+- Meta-labeling
+- Gestão de risco
+- Execução de ordens
+
+Fluxo de Execução:
+1. Carrega configurações
+2. Inicializa componentes
+3. Conecta ao MT5
+4. Loop assíncrono de trading:
+   - Obtém dados de mercado
+   - Calcula features
+   - Detecta eventos CUSUM
+   - Gera sinais (primário + meta)
+   - Valida risco
+   - Executa ordens
+5. Gestão de exceções e reconexão
 """
 
-import time
+import asyncio
+import json
 import signal
 import sys
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional
+from datetime import datetime
 
-# Imports dos módulos do sistema
-from core.logger import TradingLogger, logger_instance
-from core.mt5_interface import MT5Client
-from data.data_feed import MarketDataHandler
-from strategies.atr_trend_follower import ATRTrendFollower
-from execution.order_manager import OrderManager
-from risk.risk_manager import RiskManager
-from utils.config import load_config
+# Imports dos módulos do sistema (usando __init__.py populados)
+from core import configure_logging_from_config, get_logger, MT5Client, measure_time
+from data import FeatureEngine, CUSUMFilter
+from strategies import PrimaryStrategy, MetaLabeler, AITradingLogic
+from risk import KellyRiskManager
+from execution import OrderManager
+
+logger = get_logger(__name__)
 
 
 class TradingBot:
     """
-    Bot de Trading Principal
-    Coordena todos os componentes
+    Robô de Trading Institucional com IA.
+    
+    Orquestra todos os componentes do sistema de forma assíncrona
+    com tratamento robusto de erros e reconexão automática.
     """
-
+    
     def __init__(self, config_path: str = "config/settings.json"):
         """
+        Inicializa o robô de trading.
+        
         Args:
-            config_path: Caminho do arquivo de configuração
+            config_path: Caminho para arquivo de configuração
         """
         self.config_path = config_path
-        self.config: Optional[Dict[str, Any]] = None
+        self.config: Dict[str, Any] = {}
         self.running = False
         
-        # Componentes
-        self.logger = None
+        # Componentes do sistema (inicializados em setup)
         self.mt5_client: Optional[MT5Client] = None
-        self.data_handler: Optional[MarketDataHandler] = None
-        self.strategy: Optional[ATRTrendFollower] = None
+        self.feature_engine: Optional[FeatureEngine] = None
+        self.cusum_filters: Dict[str, CUSUMFilter] = {}
+        self.primary_strategy: Optional[PrimaryStrategy] = None
+        self.meta_labeler: Optional[MetaLabeler] = None
+        self.ai_logic: Optional[AITradingLogic] = None
+        self.risk_manager: Optional[KellyRiskManager] = None
         self.order_manager: Optional[OrderManager] = None
-        self.risk_manager: Optional[RiskManager] = None
         
-        # Controle
-        self.last_update = datetime.now()
-        self.last_daily_reset = datetime.now().date()
+        # Estado do sistema
+        self.symbols: list = []
+        self.active_positions: Dict[str, Any] = {}
         
-        # Setup signal handlers para shutdown gracioso
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
-    def initialize(self) -> bool:
+        logger.info("=" * 80)
+        logger.info("TradingBot Inicializado")
+        logger.info("=" * 80)
+    
+    def load_config(self) -> None:
         """
-        Inicializa todos os componentes
-        
-        Returns:
-            True se inicialização bem sucedida
+        Carrega configurações do arquivo JSON.
         """
-        print("=" * 80)
-        print("INICIALIZANDO TRADING BOT")
-        print("=" * 80)
-        
         try:
-            # 1. Carrega configuração
-            print("Carregando configuração...")
-            self.config = load_config(self.config_path)
-            print("✓ Configuração carregada")
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                self.config = json.load(f)
             
-            # 2. Setup Logger
-            print("Configurando sistema de logging...")
-            log_config = self.config.get('logging', {})
-            logger_instance.setup(
-                log_level=log_config.get('level', 'INFO'),
-                log_to_file=log_config.get('log_to_file', True),
-                log_dir=log_config.get('log_dir', 'logs'),
-                max_bytes=log_config.get('max_bytes', 10485760),
-                backup_count=log_config.get('backup_count', 5)
-            )
-            self.logger = logger_instance.get_logger()
-            print("✓ Logger configurado")
-            
-            # 3. Conecta ao MT5
-            self.logger.info("Conectando ao MetaTrader 5...")
-            mt5_config = self.config['mt5']
-            self.mt5_client = MT5Client()
-            
-            if not self.mt5_client.connect(
-                login=mt5_config['login'],
-                password=mt5_config['password'],
-                server=mt5_config['server'],
-                path=mt5_config.get('path', ''),
-                timeout=mt5_config.get('timeout', 60000)
-            ):
-                self.logger.error("Falha na conexão com MT5")
-                return False
-            
-            # 4. Inicializa Data Handler
-            self.logger.info("Inicializando Market Data Handler...")
-            trading_config = self.config['trading']
-            self.data_handler = MarketDataHandler(
-                symbols=trading_config['symbols'],
-                timeframe=trading_config.get('timeframe', 'M15'),
-                buffer_size=1000
-            )
-            
-            if not self.data_handler.initialize_buffers():
-                self.logger.error("Falha ao inicializar buffers de dados")
-                return False
-            
-            # 5. Inicializa Estratégia
-            self.logger.info("Inicializando Estratégia...")
-            strategy_config = self.config['strategy']['atr_trend_follower']
-            self.strategy = ATRTrendFollower(parameters=strategy_config)
-            
-            if not self.strategy.initialize():
-                self.logger.error("Falha ao inicializar estratégia")
-                return False
-            
-            # 6. Inicializa Order Manager
-            self.logger.info("Inicializando Order Manager...")
-            self.order_manager = OrderManager(
-                magic_number=trading_config.get('magic_number', 123456),
-                deviation=20
-            )
-            
-            # 7. Inicializa Risk Manager
-            self.logger.info("Inicializando Risk Manager...")
-            risk_config = self.config['risk']
-            self.risk_manager = RiskManager(
-                risk_percent_per_trade=risk_config.get('risk_percent_per_trade', 1.0),
-                max_daily_drawdown_percent=risk_config.get('max_daily_drawdown_percent', 3.0),
-                max_position_size=risk_config.get('max_position_size', 1.0),
-                min_position_size=risk_config.get('min_position_size', 0.01),
-                max_positions=trading_config.get('max_positions', 3),
-                use_dynamic_sizing=risk_config.get('use_dynamic_sizing', True)
-            )
-            
-            if not self.risk_manager.initialize():
-                self.logger.error("Falha ao inicializar Risk Manager")
-                return False
-            
-            self.logger.info("=" * 80)
-            self.logger.info("SISTEMA INICIALIZADO COM SUCESSO!")
-            self.logger.info("=" * 80)
-            
-            return True
+            logger.info(f"Configurações carregadas de {self.config_path}")
             
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"Erro na inicialização: {str(e)}", exc_info=True)
-            else:
-                print(f"ERRO: {str(e)}")
-            return False
-
-    def run(self) -> None:
-        """Loop principal do bot"""
-        if not self.config.get('trading', {}).get('enable_trading', True):
-            self.logger.warning("Trading está DESABILITADO na configuração!")
-            return
-
-        self.running = True
-        self.logger.info("Iniciando loop principal de trading...")
-        
-        update_interval = 60  # Atualiza a cada 60 segundos
-        
-        try:
-            while self.running:
-                try:
-                    # Verifica reset diário
-                    self._check_daily_reset()
-                    
-                    # Verifica conexão
-                    if not self.mt5_client.check_connection():
-                        self.logger.error("Conexão perdida, tentando reconectar...")
-                        if not self.mt5_client.reconnect():
-                            self.logger.error("Falha na reconexão, aguardando...")
-                            time.sleep(30)
-                            continue
-                    
-                    # Atualiza dados de mercado
-                    self.data_handler.update_data()
-                    
-                    # Processa cada símbolo
-                    for symbol in self.config['trading']['symbols']:
-                        self._process_symbol(symbol)
-                    
-                    # Log status de risco periodicamente
-                    if (datetime.now() - self.last_update).seconds >= 300:  # A cada 5 min
-                        self.risk_manager.log_risk_status()
-                        self.last_update = datetime.now()
-                    
-                    # Aguarda próximo ciclo
-                    time.sleep(update_interval)
-                    
-                except KeyboardInterrupt:
-                    self.logger.info("Interrupção pelo usuário...")
-                    break
-                except Exception as e:
-                    self.logger.error(f"Erro no loop principal: {str(e)}", exc_info=True)
-                    time.sleep(30)
-                    
-        finally:
-            self.shutdown()
-
-    def _process_symbol(self, symbol: str) -> None:
+            logger.error(f"Erro ao carregar configurações: {e}")
+            raise
+    
+    async def setup(self) -> None:
         """
-        Processa um símbolo
+        Inicializa todos os componentes do sistema.
+        """
+        logger.info("Inicializando componentes do sistema...")
+        
+        # Configura logging
+        configure_logging_from_config(self.config_path)
+        
+        # Carrega configurações
+        self.load_config()
+        
+        # Inicializa MT5 Client
+        mt5_config = self.config['mt5']
+        self.mt5_client = MT5Client(
+            login=mt5_config['login'],
+            password=mt5_config['password'],
+            server=mt5_config['server'],
+            timeout=mt5_config['timeout'],
+            path=mt5_config.get('path', '')
+        )
+        
+        # Conecta ao MT5
+        await self.mt5_client.connect()
+        
+        # Inicializa Feature Engine
+        strategy_config = self.config['strategy']
+        self.feature_engine = FeatureEngine(
+            ema_period=strategy_config['ema_period'],
+            rsi_period=strategy_config['rsi_period'],
+            atr_period=strategy_config['atr_period']
+        )
+        
+        # Inicializa filtros CUSUM para cada símbolo
+        self.symbols = self.config['trading']['symbols']
+        for symbol in self.symbols:
+            self.cusum_filters[symbol] = CUSUMFilter(
+                threshold=strategy_config['cusum_threshold'],
+                drift=strategy_config['cusum_drift']
+            )
+        
+        # Inicializa Estratégia Primária
+        risk_config = self.config['risk']
+        self.primary_strategy = PrimaryStrategy(
+            ema_period=strategy_config['ema_period'],
+            rsi_period=strategy_config['rsi_period'],
+            rsi_overbought=strategy_config['rsi_overbought'],
+            rsi_oversold=strategy_config['rsi_oversold'],
+            sl_atr_mult=risk_config['stop_loss_atr_multiplier'],
+            tp_atr_mult=risk_config['take_profit_atr_multiplier']
+        )
+        
+        # Inicializa Meta-Labeler
+        ml_config = self.config['ml']
+        self.meta_labeler = MetaLabeler(
+            n_estimators=ml_config['n_estimators'],
+            max_depth=ml_config['max_depth'],
+            min_samples_split=ml_config['min_samples_split'],
+            random_state=ml_config['random_state'],
+            model_path=ml_config['model_path']
+        )
+        
+        # Inicializa AI Logic
+        self.ai_logic = AITradingLogic(
+            feature_engine=self.feature_engine,
+            primary_strategy=self.primary_strategy,
+            meta_labeler=self.meta_labeler,
+            meta_threshold=strategy_config['meta_model_threshold']
+        )
+        
+        # Inicializa Risk Manager
+        self.risk_manager = KellyRiskManager(
+            kelly_fraction=risk_config['kelly_fraction'],
+            max_risk_per_trade=risk_config['max_risk_per_trade'],
+            estimated_win_rate=risk_config['estimated_win_rate'],
+            min_kelly_exposure=risk_config['min_kelly_exposure'],
+            max_kelly_exposure=risk_config['max_kelly_exposure']
+        )
+        
+        # Inicializa Order Manager
+        trading_config = self.config['trading']
+        self.order_manager = OrderManager(
+            mt5_client=self.mt5_client,
+            magic_number=trading_config['magic_number'],
+            deviation=trading_config['deviation'],
+            max_retries=3
+        )
+        
+        logger.info("✓ Todos os componentes inicializados com sucesso")
+    
+    @measure_time
+    async def process_symbol(self, symbol: str) -> None:
+        """
+        Processa um símbolo: análise, geração de sinal e execução.
         
         Args:
-            symbol: Símbolo a processar
+            symbol: Nome do símbolo a processar
         """
         try:
-            # Obtém dados com indicadores
-            required_indicators = self.strategy.get_required_indicators()
-            data = self.data_handler.calculate_indicators(symbol, required_indicators)
+            # Verifica se já existe posição aberta para este símbolo
+            existing_positions = await self.mt5_client.get_positions(symbol)
             
-            if data is None or len(data) < 50:
-                self.logger.debug(f"Dados insuficientes para {symbol}")
+            if existing_positions:
+                logger.debug(f"{symbol}: Posição já aberta, pulando análise")
                 return
             
-            # Gera sinal
-            signal = self.strategy.generate_signal(data, symbol)
+            # Obtém dados históricos
+            timeframe = self.config['trading']['timeframe']
+            lookback = self.config['strategy']['lookback_bars']
             
-            if signal is None:
+            df = await self.mt5_client.get_rates(symbol, timeframe, lookback)
+            
+            if df is None or len(df) < self.config['strategy']['min_data_points']:
+                logger.warning(f"{symbol}: Dados insuficientes")
                 return
             
-            # Valida sinal com Risk Manager
-            is_valid, reason = self.risk_manager.validate_signal(signal)
+            # Calcula retorno logarítmico para CUSUM
+            df['log_return'] = df['close'].pct_change().apply(lambda x: 0 if abs(x) < 1e-10 else x)
+            last_return = df['log_return'].iloc[-1]
             
-            if not is_valid:
-                self.logger.warning(f"Sinal rejeitado para {symbol}: {reason}")
-                logger_instance.log_risk_event("SIGNAL_REJECTED", f"{symbol} - {reason}")
-                return
-            
-            # Calcula tamanho da posição
-            volume = self.risk_manager.calculate_position_size(symbol, signal)
-            
-            if volume is None:
-                self.logger.error(f"Falha ao calcular tamanho de posição para {symbol}")
-                return
-            
-            # Log do sinal
-            logger_instance.log_signal(symbol, signal.signal_type.value, signal.reason)
-            
-            # Executa ordem
-            self.logger.info(f"Executando sinal: {signal}")
-            result = self.order_manager.execute_signal(
-                signal=signal,
-                volume=volume,
-                comment=f"Bot_{signal.signal_type.value}"
+            # Atualiza filtro CUSUM
+            cusum_filter = self.cusum_filters[symbol]
+            event_detected, direction = cusum_filter.update(
+                last_return,
+                df.index[-1]
             )
             
-            if result.success:
-                logger_instance.log_trade(
-                    action=signal.signal_type.value,
-                    symbol=symbol,
-                    volume=volume,
-                    price=result.price,
-                    sl=signal.stop_loss or 0,
-                    tp=signal.take_profit or 0,
-                    ticket=result.ticket
+            # Só prossegue se CUSUM detectou evento
+            if not event_detected:
+                logger.debug(f"{symbol}: Nenhum evento CUSUM detectado")
+                return
+            
+            logger.info(f"{symbol}: ⚡ EVENTO CUSUM DETECTADO - Direção: {direction}")
+            
+            # Analisa com IA
+            signal = self.ai_logic.analyze(df)
+            
+            if signal['action'] == 'HOLD':
+                logger.info(f"{symbol}: Nenhum sinal de trading gerado")
+                return
+            
+            # Valida com meta-modelo
+            if not signal.get('meta_approved', False):
+                logger.info(f"{symbol}: Sinal rejeitado pelo meta-modelo")
+                return
+            
+            logger.info(
+                f"{symbol}: ✓ SINAL APROVADO - "
+                f"Ação: {signal['action']}, "
+                f"Probabilidade: {signal['meta_probability']:.2%}"
+            )
+            
+            # Obtém informações da conta
+            account_info = await self.mt5_client.get_account_info()
+            if account_info is None:
+                logger.error(f"{symbol}: Erro ao obter informações da conta")
+                return
+            
+            # Obtém informações do símbolo
+            symbol_info = await self.mt5_client.get_symbol_info(symbol)
+            if symbol_info is None:
+                logger.error(f"{symbol}: Erro ao obter informações do símbolo")
+                return
+            
+            # Calcula payoff ratio
+            payoff_ratio = self.risk_manager.calculate_payoff_ratio(
+                entry_price=signal['entry_price'],
+                stop_loss=signal['sl'],
+                take_profit=signal['tp']
+            )
+            
+            # Calcula tamanho da posição
+            position_size = self.risk_manager.calculate_position_size(
+                account_balance=account_info['balance'],
+                entry_price=signal['entry_price'],
+                stop_loss=signal['sl'],
+                symbol_info=symbol_info,
+                win_rate=signal['meta_probability'],
+                payoff_ratio=payoff_ratio
+            )
+            
+            if not position_size['valid']:
+                logger.error(f"{symbol}: Tamanho de posição inválido")
+                return
+            
+            # Valida trade
+            all_positions = await self.mt5_client.get_positions()
+            max_positions = self.config['trading']['max_positions']
+            
+            validation = self.risk_manager.validate_trade(
+                account_balance=account_info['balance'],
+                account_equity=account_info['equity'],
+                existing_positions=len(all_positions),
+                max_positions=max_positions,
+                proposed_risk=position_size['risk_amount']
+            )
+            
+            if not validation['approved']:
+                logger.warning(f"{symbol}: Trade rejeitado pela validação de risco")
+                return
+            
+            # Executa ordem
+            logger.info(
+                f"{symbol}: Executando {signal['action']} - "
+                f"{position_size['volume']:.2f} lots"
+            )
+            
+            order_result = await self.order_manager.send_market_order(
+                symbol=symbol,
+                order_type=signal['action'],
+                volume=position_size['volume'],
+                stop_loss=signal['sl'],
+                take_profit=signal['tp'],
+                comment=f"AI-{signal['meta_probability']:.0%}"
+            )
+            
+            if order_result['success']:
+                logger.info(
+                    f"{symbol}: ✓✓✓ ORDEM EXECUTADA COM SUCESSO ✓✓✓"
                 )
-                self.logger.info(f"✓ Ordem executada: Ticket {result.ticket}")
-            else:
-                self.logger.error(f"✗ Falha na execução: {result.comment}")
+                logger.info(
+                    f"Ticket: {order_result['ticket']}, "
+                    f"Preço: {order_result['price']}, "
+                    f"Risco: {position_size['risk_amount']:.2f} "
+                    f"({position_size['risk_percentage']:.2f}%)"
+                )
                 
-        except Exception as e:
-            self.logger.error(f"Erro ao processar {symbol}: {str(e)}", exc_info=True)
-
-    def _check_daily_reset(self) -> None:
-        """Verifica e executa reset diário se necessário"""
-        today = datetime.now().date()
+                # Armazena informação da posição
+                self.active_positions[symbol] = {
+                    'ticket': order_result['ticket'],
+                    'opened_at': datetime.now(),
+                    'signal': signal,
+                    'position_size': position_size
+                }
+            else:
+                logger.error(
+                    f"{symbol}: ✗ FALHA NA EXECUÇÃO: {order_result.get('error')}"
+                )
         
-        if today > self.last_daily_reset:
-            self.logger.info("Novo dia detectado, executando reset diário...")
-            self.risk_manager.reset_daily_metrics()
-            self.last_daily_reset = today
-
-    def close_all_positions(self) -> None:
-        """Fecha todas as posições abertas"""
-        self.logger.info("Fechando todas as posições...")
-        result = self.order_manager.close_all_positions()
-        self.logger.info(f"Posições fechadas: {result}")
-
-    def shutdown(self) -> None:
-        """Encerra o sistema graciosamente"""
-        self.logger.info("=" * 80)
-        self.logger.info("ENCERRANDO TRADING BOT")
-        self.logger.info("=" * 80)
+        except Exception as e:
+            logger.error(f"{symbol}: Erro no processamento: {e}", exc_info=True)
+    
+    async def trading_loop(self) -> None:
+        """
+        Loop principal de trading assíncrono.
+        
+        Varre continuamente todos os símbolos configurados,
+        processa sinais e executa operações.
+        """
+        loop_interval = self.config['system']['loop_interval']
+        
+        logger.info("=" * 80)
+        logger.info("Iniciando Loop de Trading")
+        logger.info(f"Símbolos: {', '.join(self.symbols)}")
+        logger.info(f"Intervalo: {loop_interval}s")
+        logger.info("=" * 80)
+        
+        iteration = 0
+        
+        while self.running:
+            try:
+                iteration += 1
+                logger.info(f"--- Iteração {iteration} ---")
+                
+                # Garante conexão
+                if not await self.mt5_client.ensure_connected():
+                    logger.error("Conexão perdida. Tentando reconectar...")
+                    await asyncio.sleep(5.0)
+                    continue
+                
+                # Processa cada símbolo
+                for symbol in self.symbols:
+                    await self.process_symbol(symbol)
+                
+                # Aguarda antes da próxima iteração (NON-BLOCKING)
+                await asyncio.sleep(loop_interval)
+            
+            except KeyboardInterrupt:
+                logger.info("Interrupção do usuário detectada")
+                break
+            
+            except Exception as e:
+                logger.error(f"Erro no loop de trading: {e}", exc_info=True)
+                await asyncio.sleep(5.0)  # Delay em caso de erro
+        
+        logger.info("Loop de trading finalizado")
+    
+    async def shutdown(self) -> None:
+        """
+        Desliga o sistema de forma segura.
+        """
+        logger.info("Iniciando shutdown...")
         
         self.running = False
-        
-        # Opcionalmente fecha todas as posições
-        # self.close_all_positions()
         
         # Desconecta do MT5
         if self.mt5_client:
-            self.mt5_client.disconnect()
+            await self.mt5_client.disconnect()
         
-        self.logger.info("Sistema encerrado")
-        self.logger.info("=" * 80)
-
-    def _signal_handler(self, signum, frame):
-        """Handler para sinais de sistema"""
-        self.logger.info(f"Sinal {signum} recebido, encerrando...")
-        self.running = False
-
-
-def main():
-    """Função principal"""
-    print("""
-    ╔════════════════════════════════════════════╗
-    ║   TRADING BOT MT5/PYTHON - PROFESSIONAL   ║
-    ║         Sistema de Trading Algorítmico     ║
-    ╚════════════════════════════════════════════╝
-    """)
+        logger.info("Shutdown concluído")
     
-    # Cria e inicializa bot
+    async def run(self) -> None:
+        """
+        Executa o robô de trading.
+        """
+        try:
+            # Setup
+            await self.setup()
+            
+            # Inicia loop de trading
+            self.running = True
+            await self.trading_loop()
+        
+        except Exception as e:
+            logger.critical(f"Erro crítico: {e}", exc_info=True)
+        
+        finally:
+            await self.shutdown()
+
+
+async def main():
+    """
+    Função principal assíncrona.
+    """
+    # Cria instância do bot
     bot = TradingBot(config_path="config/settings.json")
     
-    if not bot.initialize():
-        print("✗ Falha na inicialização do sistema")
-        sys.exit(1)
+    # Configura handlers de sinal para shutdown gracioso
+    def signal_handler(signum, frame):
+        logger.info(f"Sinal {signum} recebido. Iniciando shutdown...")
+        asyncio.create_task(bot.shutdown())
     
-    print("\n✓ Sistema pronto. Iniciando trading...\n")
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
-    # Inicia loop principal
-    try:
-        bot.run()
-    except KeyboardInterrupt:
-        print("\n\nInterrompido pelo usuário")
-    except Exception as e:
-        print(f"\n✗ Erro fatal: {str(e)}")
-        if bot.logger:
-            bot.logger.error("Erro fatal", exc_info=True)
-    finally:
-        bot.shutdown()
+    # Executa bot
+    await bot.run()
 
 
 if __name__ == "__main__":
-    main()
+    """
+    Ponto de entrada do programa.
+    
+    Uso:
+        python main.py
+    """
+    try:
+        # Executa loop assíncrono
+        asyncio.run(main())
+    
+    except KeyboardInterrupt:
+        print("\n\nPrograma interrompido pelo usuário")
+        sys.exit(0)
+    
+    except Exception as e:
+        print(f"\n\nErro fatal: {e}")
+        sys.exit(1)

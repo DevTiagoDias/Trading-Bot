@@ -1,4 +1,6 @@
 {
+  "_comment": "PERFIL CONSERVADOR - Use esta configuração para começar",
+  
   "mt5": {
     "login": 123456789,
     "password": "SuaSenhaSegura@2025",
@@ -6,35 +8,39 @@
     "timeout": 60000,
     "path": ""
   },
+  
   "trading": {
-    "symbols": ["EURUSD", "GBPUSD", "USDJPY"],
+    "symbols": ["EURUSD"],
     "timeframe": "H1",
-    "max_positions": 3,
+    "max_positions": 1,
     "magic_number": 987654321,
     "slippage": 10,
     "deviation": 20
   },
+  
   "risk": {
-    "kelly_fraction": 0.25,
-    "max_risk_per_trade": 0.02,
+    "kelly_fraction": 0.1,
+    "max_risk_per_trade": 0.01,
     "estimated_win_rate": 0.55,
-    "min_kelly_exposure": 0.01,
-    "max_kelly_exposure": 0.10,
-    "stop_loss_atr_multiplier": 2.0,
-    "take_profit_atr_multiplier": 3.0
+    "min_kelly_exposure": 0.005,
+    "max_kelly_exposure": 0.05,
+    "stop_loss_atr_multiplier": 2.5,
+    "take_profit_atr_multiplier": 4.0
   },
+  
   "strategy": {
     "ema_period": 200,
     "rsi_period": 14,
     "rsi_overbought": 70,
     "rsi_oversold": 30,
     "atr_period": 14,
-    "cusum_threshold": 0.02,
-    "cusum_drift": 0.001,
-    "meta_model_threshold": 0.60,
+    "cusum_threshold": 0.025,
+    "cusum_drift": 0.0005,
+    "meta_model_threshold": 0.65,
     "min_data_points": 500,
     "lookback_bars": 1000
   },
+  
   "ml": {
     "n_estimators": 100,
     "max_depth": 10,
@@ -43,6 +49,7 @@
     "model_path": "models/meta_classifier.pkl",
     "retrain_interval_hours": 168
   },
+  
   "logging": {
     "level": "INFO",
     "console": true,
@@ -51,8 +58,9 @@
     "backup_count": 5,
     "log_dir": "logs"
   },
+  
   "system": {
-    "loop_interval": 0.5,
+    "loop_interval": 1.0,
     "retry_attempts": 5,
     "retry_delay": 2.0,
     "exponential_backoff": true,

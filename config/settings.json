@@ -1,10 +1,10 @@
 {
   "mt5": {
-    "login": 123456789,
-    "password": "SuaSenhaSegura@2025",
+    "login": 5046661606,
+    "password": "XyNyW!5e",
     "server": "MetaQuotes-Demo",
     "timeout": 60000,
-    "path": ""
+    "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
   },
   "trading": {
     "symbols": ["EURUSD", "GBPUSD", "USDJPY"],

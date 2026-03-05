@@ -1,4 +1,9 @@
 {
+  "telegram": {
+    "enabled": true,
+    "token": "7718902246:AAEnr9tzRjhAW5CWSOy8QOXGNn6yNl7Qnb4",
+    "chat_id": "1994323926"
+  },
   "mt5": {
     "login": 5046661606,
     "password": "XyNyW!5e",
@@ -7,7 +12,7 @@
     "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
   },
   "trading": {
-    "symbols": ["EURUSD", "GBPUSD", "USDJPY"],
+    "symbols": ["EURUSD", "GBPUSD", "USDJPY","USDCHF"],
     "timeframe": "H1",
     "max_positions": 3,
     "magic_number": 987654321,
@@ -29,9 +34,9 @@
     "rsi_overbought": 70,
     "rsi_oversold": 30,
     "atr_period": 14,
-    "cusum_threshold": 0.02,
-    "cusum_drift": 0.001,
-    "meta_model_threshold": 0.60,
+    "cusum_threshold": 0.002,
+    "cusum_drift": 0.0001,
+    "meta_model_threshold": 0.55,
     "min_data_points": 500,
     "lookback_bars": 1000
   },

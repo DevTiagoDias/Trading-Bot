@@ -4,8 +4,11 @@ Script de Treinamento do Meta-Modelo.
 Este script treina o classificador RandomForest usado no meta-labeling
 com dados históricos de um símbolo específico.
 
-Uso:
+Uso Manual:
     python train_model.py
+    
+Uso Automático:
+    Importado pelo main.py para retreinamento periódico.
 """
 
 import asyncio
@@ -27,8 +30,9 @@ async def train_meta_model(
     symbol: str = "EURUSD",
     timeframe: str = "H1",
     lookback: int = 5000,
-    side: int = 1
-) -> None:
+    side: int = 3, # 3 = Ambos (Padrão)
+    silent: bool = False
+) -> dict:
     """
     Treina o meta-modelo com dados históricos.
     
@@ -36,11 +40,16 @@ async def train_meta_model(
         symbol: Símbolo para treinamento
         timeframe: Timeframe dos dados
         lookback: Número de barras históricas
-        side: 1 para compra, -1 para venda
+        side: 1 (Compra), -1 (Venda), 3 (Ambos)
+        silent: Se True, suprime logs excessivos (para modo automático)
+        
+    Returns:
+        Dicionário com estatísticas do treinamento: {'success': bool, 'acc': float}
     """
-    logger.info("=" * 80)
-    logger.info("Iniciando Treinamento do Meta-Modelo")
-    logger.info("=" * 80)
+    if not silent:
+        logger.info("=" * 80)
+        logger.info("Iniciando Treinamento do Meta-Modelo")
+        logger.info("=" * 80)
     
     # Carrega configurações
     with open("config/settings.json", 'r') as f:
@@ -55,23 +64,29 @@ async def train_meta_model(
         timeout=mt5_config['timeout']
     )
     
+    metrics_summary = {'success': False, 'acc': 0.0}
+    
     try:
         # Conecta
         await client.connect()
         
-        logger.info(f"Obtendo {lookback} barras de {symbol} {timeframe}...")
+        if not silent:
+            logger.info(f"Obtendo {lookback} barras de {symbol} {timeframe}...")
         
         # Obtém dados históricos
         df = await client.get_rates(symbol, timeframe, lookback)
         
         if df is None or len(df) == 0:
             logger.error("Falha ao obter dados históricos")
-            return
+            return metrics_summary
         
-        logger.info(f"✓ {len(df)} barras obtidas")
+        if not silent:
+            logger.info(f"✓ {len(df)} barras obtidas")
         
         # Calcula features
-        logger.info("Calculando indicadores técnicos...")
+        if not silent:
+            logger.info("Calculando indicadores técnicos...")
+            
         strategy_config = config['strategy']
         
         engine = FeatureEngine(
@@ -83,11 +98,10 @@ async def train_meta_model(
         df = engine.calculate_indicators(df)
         df = engine.create_ml_features(df)
         
-        logger.info(f"✓ Features calculadas: {len(df.columns)} colunas")
+        if not silent:
+            logger.info(f"✓ Features calculadas: {len(df.columns)} colunas")
         
-        # Treina modelo
-        logger.info(f"Treinando meta-modelo (side={side})...")
-        
+        # Configurações de Treino
         ml_config = config['ml']
         risk_config = config['risk']
         
@@ -99,50 +113,77 @@ async def train_meta_model(
             model_path=ml_config['model_path']
         )
         
-        metrics = labeler.train(
-            df=df,
-            side=side,
-            sl_mult=risk_config['stop_loss_atr_multiplier'],
-            tp_mult=risk_config['take_profit_atr_multiplier']
-        )
-        
-        if metrics['success']:
-            logger.info("=" * 80)
-            logger.info("✓✓✓ TREINAMENTO CONCLUÍDO COM SUCESSO ✓✓✓")
-            logger.info("=" * 80)
-            logger.info(f"Amostras: {metrics['n_samples']}")
-            logger.info(f"Features: {metrics['n_features']}")
-            logger.info(f"Acurácia Treino: {metrics['train_accuracy']:.2%}")
-            logger.info(f"Acurácia Teste: {metrics['test_accuracy']:.2%}")
-            logger.info("")
-            logger.info("Top 5 Features Mais Importantes:")
+        # Define quais lados treinar
+        sides_to_train = []
+        if side == 1:
+            sides_to_train = [1]
+        elif side == -1:
+            sides_to_train = [-1]
+        else:
+            sides_to_train = [1, -1] # Ambos
             
-            # Ordena features por importância
-            importance = metrics['feature_importance']
-            sorted_features = sorted(
-                importance.items(),
-                key=lambda x: x[1],
-                reverse=True
+        final_acc = 0
+        success_count = 0
+        
+        for s in sides_to_train:
+            side_name = "COMPRA" if s == 1 else "VENDA"
+            if not silent:
+                logger.info(f"Treinando meta-modelo para {side_name}...")
+            
+            metrics = labeler.train(
+                df=df,
+                side=s,
+                sl_mult=risk_config['stop_loss_atr_multiplier'],
+                tp_mult=risk_config['take_profit_atr_multiplier']
             )
             
-            for i, (feature, imp) in enumerate(sorted_features[:5], 1):
-                logger.info(f"  {i}. {feature}: {imp:.4f}")
+            if metrics['success']:
+                success_count += 1
+                final_acc = metrics['test_accuracy'] # Guarda a última acurácia
+                
+                if not silent:
+                    # Relatório Detalhado Completo (Restaurado)
+                    logger.info(f"Amostras: {metrics['n_samples']}")
+                    logger.info(f"Features: {metrics['n_features']}")
+                    logger.info(f"Acurácia Treino: {metrics['train_accuracy']:.2%}")
+                    logger.info(f"Acurácia Teste: {metrics['test_accuracy']:.2%}")
+                    
+                    # Exibe Feature Importance
+                    importances = metrics['feature_importance']
+                    sorted_features = sorted(importances.items(), key=lambda x: x[1], reverse=True)[:5]
+                    
+                    logger.info("Top 5 Features Mais Importantes:")
+                    for i, (feat, score) in enumerate(sorted_features, 1):
+                        logger.info(f"   {i}. {feat}: {score:.4f}")
+                    logger.info("-" * 40)
+        
+        # Considera sucesso se treinou pelo menos um lado com êxito
+        if success_count > 0:
+            metrics_summary['success'] = True
+            metrics_summary['acc'] = final_acc
             
-            logger.info("=" * 80)
+            if not silent:
+                logger.info("=" * 80)
+                logger.info("✓✓✓ TREINAMENTO CONCLUÍDO COM SUCESSO ✓✓✓")
+                logger.info("=" * 80)
         else:
-            logger.error(f"✗ Treinamento falhou: {metrics.get('error')}")
+            logger.error("Falha no treinamento de todos os lados selecionados")
     
     except Exception as e:
         logger.error(f"Erro durante treinamento: {e}", exc_info=True)
     
     finally:
-        # Desconecta
-        await client.disconnect()
+        # Desconecta apenas se foi chamado diretamente, não pelo singleton em loop
+        # Mas como usamos singleton, disconnect não atrapalha se reconectar depois
+        if not silent:
+            await client.disconnect()
+            
+    return metrics_summary
 
 
 async def main():
     """
-    Função principal.
+    Função principal para execução manual interativa.
     """
     # Configura logging
     configure_logging_from_config("config/settings.json")
@@ -168,16 +209,16 @@ async def main():
     timeframe = input("Timeframe [H1]: ").strip() or "H1"
     lookback = int(input("Barras históricas [5000]: ").strip() or "5000")
     
-    if choice == "1":
-        await train_meta_model(symbol, timeframe, lookback, side=1)
-    elif choice == "2":
-        await train_meta_model(symbol, timeframe, lookback, side=-1)
-    elif choice == "3":
-        logger.info("Treinando modelo para COMPRA...")
-        await train_meta_model(symbol, timeframe, lookback, side=1)
-        
-        logger.info("\nTreinando modelo para VENDA...")
-        await train_meta_model(symbol, timeframe, lookback, side=-1)
+    side_map = {"1": 1, "2": -1, "3": 3}
+    
+    if choice in side_map:
+        await train_meta_model(
+            symbol=symbol, 
+            timeframe=timeframe, 
+            lookback=lookback, 
+            side=side_map[choice],
+            silent=False
+        )
     else:
         print("Opção inválida!")
 

@@ -8,20 +8,27 @@ Integra todos os componentes:
 - Meta-labeling
 - Gestão de risco
 - Execução de ordens
+- Notificações Telegram
+- Retreinamento Automático
 
 Fluxo de Execução:
 1. Carrega configurações
 2. Inicializa componentes
 3. Conecta ao MT5
-4. Loop assíncrono de trading:
-   - Obtém dados de mercado
-   - Calcula features
-   - Detecta eventos CUSUM
-   - Gera sinais (primário + meta)
-   - Valida risco
-   - Executa ordens
-5. Gestão de exceções e reconexão
+4. Loop assíncrono de trading (Paralelo ao Telegram)
 """
+
+# --- FILTRO DE AVISOS (CRÍTICO PARA LIMPEZA DO TERMINAL) ---
+import warnings
+import os
+
+# Define variável de ambiente para suprimir avisos em subprocessos do joblib
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+# Silencia avisos específicos do scikit-learn/joblib sobre paralelismo.
+warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+# -----------------------------------------------------------
 
 import asyncio
 import json
@@ -29,14 +36,15 @@ import signal
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# Imports dos módulos do sistema (usando __init__.py populados)
-from core import configure_logging_from_config, get_logger, MT5Client, measure_time
+# Imports dos módulos do sistema
+from core import configure_logging_from_config, get_logger, MT5Client, measure_time, TelegramBot
 from data import FeatureEngine, CUSUMFilter
 from strategies import PrimaryStrategy, MetaLabeler, AITradingLogic
 from risk import KellyRiskManager
 from execution import OrderManager
+from train_model import train_meta_model  # Importa função de treino para o modo automático
 
 logger = get_logger(__name__)
 
@@ -60,6 +68,9 @@ class TradingBot:
         self.config: Dict[str, Any] = {}
         self.running = False
         
+        # Tarefa de Background do Telegram
+        self.telegram_task: Optional[asyncio.Task] = None
+        
         # Componentes do sistema (inicializados em setup)
         self.mt5_client: Optional[MT5Client] = None
         self.feature_engine: Optional[FeatureEngine] = None
@@ -69,10 +80,12 @@ class TradingBot:
         self.ai_logic: Optional[AITradingLogic] = None
         self.risk_manager: Optional[KellyRiskManager] = None
         self.order_manager: Optional[OrderManager] = None
+        self.telegram: Optional[TelegramBot] = None
         
         # Estado do sistema
         self.symbols: list = []
         self.active_positions: Dict[str, Any] = {}
+        self.last_retrain_check = datetime.now()
         
         logger.info("=" * 80)
         logger.info("TradingBot Inicializado")
@@ -104,6 +117,14 @@ class TradingBot:
         # Carrega configurações
         self.load_config()
         
+        # Inicializa Telegram
+        tg_config = self.config.get('telegram', {'enabled': False})
+        self.telegram = TelegramBot(
+            token=tg_config.get('token', ''),
+            chat_id=tg_config.get('chat_id', ''),
+            enabled=tg_config.get('enabled', False)
+        )
+        
         # Inicializa MT5 Client
         mt5_config = self.config['mt5']
         self.mt5_client = MT5Client(
@@ -116,6 +137,11 @@ class TradingBot:
         
         # Conecta ao MT5
         await self.mt5_client.connect()
+        
+        # Envia mensagem de início com saldo
+        account_info = await self.mt5_client.get_account_info()
+        if account_info:
+            await self.telegram.send_startup_message(balance=account_info['balance'])
         
         # Inicializa Feature Engine
         strategy_config = self.config['strategy']
@@ -182,6 +208,61 @@ class TradingBot:
         
         logger.info("✓ Todos os componentes inicializados com sucesso")
     
+    async def check_and_retrain_model(self):
+        """
+        Verifica se precisa retreinar o modelo baseado no tempo decorrido.
+        Se necessário, pausa o trading, treina e recarrega o modelo.
+        """
+        try:
+            # Intervalo configurado (padrão 168h = 1 semana)
+            interval_hours = self.config['ml'].get('retrain_interval_hours', 168)
+            last_train = self.meta_labeler.last_training_date
+            
+            should_train = False
+            
+            # Se nunca foi treinado ou se passou do tempo
+            if last_train is None:
+                should_train = True
+            else:
+                elapsed = datetime.now() - last_train
+                if elapsed.total_seconds() > (interval_hours * 3600):
+                    should_train = True
+            
+            if should_train:
+                logger.info("⏳ Modelo desatualizado. Iniciando retreinamento automático...")
+                
+                if self.telegram:
+                    await self.telegram.send_message("⚙️ <b>Manutenção:</b> Retreinando Inteligência Artificial com dados recentes...")
+                
+                # Usa o primeiro símbolo da lista para treino (padrão)
+                train_symbol = self.symbols[0] if self.symbols else "EURUSD"
+                
+                # Executa o treinamento em modo silencioso
+                result = await train_meta_model(
+                    symbol=train_symbol,
+                    side=3, # Treina ambos os lados
+                    silent=True
+                )
+                
+                if result['success']:
+                    # Recarrega o modelo novo na memória
+                    self.meta_labeler.reload()
+                    logger.info(f"✓ Modelo atualizado com sucesso. Nova acurácia: {result['acc']:.2%}")
+                    
+                    if self.telegram:
+                        await self.telegram.send_message(
+                            f"✅ <b>IA Atualizada!</b>\n"
+                            f"Nova Acurácia: {result['acc']:.1%}\n"
+                            f"Sistema pronto para operar."
+                        )
+                else:
+                    logger.error("Falha no retreinamento automático")
+                    if self.telegram:
+                        await self.telegram.send_message("⚠️ <b>Erro:</b> Falha ao atualizar IA. Usando modelo anterior.")
+                    
+        except Exception as e:
+            logger.error(f"Erro no processo de retreinamento: {e}", exc_info=True)
+
     @measure_time
     async def process_symbol(self, symbol: str) -> None:
         """
@@ -235,9 +316,11 @@ class TradingBot:
             
             # Valida com meta-modelo
             if not signal.get('meta_approved', False):
-                logger.info(f"{symbol}: Sinal rejeitado pelo meta-modelo")
+                prob = signal.get('meta_probability', 0.0)
+                logger.info(f"{symbol}: Sinal rejeitado pelo meta-modelo (Probabilidade IA: {prob:.2%})")
                 return
             
+            # Sinal Aprovado (Restauração da demonstração de porcentagem requerida)
             logger.info(
                 f"{symbol}: ✓ SINAL APROVADO - "
                 f"Ação: {signal['action']}, "
@@ -326,13 +409,35 @@ class TradingBot:
                     'signal': signal,
                     'position_size': position_size
                 }
+                
+                # --- NOTIFICAÇÃO TELEGRAM ---
+                if self.telegram:
+                    # Obtém dados atualizados da conta para mostrar o saldo correto
+                    updated_account = await self.mt5_client.get_account_info()
+                    balance = updated_account['balance'] if updated_account else account_info['balance']
+                    equity = updated_account['equity'] if updated_account else account_info['equity']
+
+                    await self.telegram.send_trade_alert(
+                        symbol=symbol,
+                        action=signal['action'],
+                        price=order_result['price'],
+                        volume=position_size['volume'],
+                        sl=signal['sl'],
+                        tp=signal['tp'],
+                        prob=signal['meta_probability'],
+                        ticket=order_result['ticket'],
+                        balance=balance,
+                        equity=equity
+                    )
+                # -----------------------------
+
             else:
                 logger.error(
                     f"{symbol}: ✗ FALHA NA EXECUÇÃO: {order_result.get('error')}"
                 )
         
         except Exception as e:
-            logger.error(f"{symbol}: Erro no processamento: {e}", exc_info=True)
+            logger.error(f"{symbol}: Erro no processamento de {symbol}: {e}", exc_info=True)
     
     async def trading_loop(self) -> None:
         """
@@ -354,13 +459,20 @@ class TradingBot:
         while self.running:
             try:
                 iteration += 1
-                logger.info(f"--- Iteração {iteration} ---")
+                if iteration % 100 == 0:
+                    logger.info(f"--- Iteração {iteration} ---")
                 
                 # Garante conexão
                 if not await self.mt5_client.ensure_connected():
                     logger.error("Conexão perdida. Tentando reconectar...")
                     await asyncio.sleep(5.0)
                     continue
+                
+                # VERIFICAÇÃO DE RETREINAMENTO AUTOMÁTICO
+                # Verifica a cada ~60 segundos para não sobrecarregar
+                if (datetime.now() - self.last_retrain_check).total_seconds() > 60:
+                    await self.check_and_retrain_model()
+                    self.last_retrain_check = datetime.now()
                 
                 # Processa cada símbolo
                 for symbol in self.symbols:
@@ -387,6 +499,18 @@ class TradingBot:
         
         self.running = False
         
+        # Para o bot do Telegram
+        if self.telegram:
+            self.telegram.stop()
+            
+        if self.telegram_task:
+            logger.info("Cancelando tarefa do Telegram...")
+            self.telegram_task.cancel()
+            try:
+                await self.telegram_task
+            except asyncio.CancelledError:
+                pass
+        
         # Desconecta do MT5
         if self.mt5_client:
             await self.mt5_client.disconnect()
@@ -400,6 +524,13 @@ class TradingBot:
         try:
             # Setup
             await self.setup()
+            
+            # Inicia Telegram em Background Task (Paralelo)
+            if self.telegram and self.telegram.enabled:
+                logger.info("Iniciando serviço Telegram em background...")
+                self.telegram_task = asyncio.create_task(
+                    self.telegram.start(self.mt5_client)
+                )
             
             # Inicia loop de trading
             self.running = True
@@ -419,9 +550,8 @@ async def main():
     # Cria instância do bot
     bot = TradingBot(config_path="config/settings.json")
     
-    # Configura handlers de sinal para shutdown gracioso
+    # Configura handlers de sinal para shutdown gracioso (Sem logger.info interno para o Windows)
     def signal_handler(signum, frame):
-        logger.info(f"Sinal {signum} recebido. Iniciando shutdown...")
         asyncio.create_task(bot.shutdown())
     
     signal.signal(signal.SIGINT, signal_handler)
@@ -434,17 +564,16 @@ async def main():
 if __name__ == "__main__":
     """
     Ponto de entrada do programa.
-    
-    Uso:
-        python main.py
     """
     try:
+        if sys.platform == 'win32':
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            
         # Executa loop assíncrono
         asyncio.run(main())
     
     except KeyboardInterrupt:
         print("\n\nPrograma interrompido pelo usuário")
-        sys.exit(0)
     
     except Exception as e:
         print(f"\n\nErro fatal: {e}")

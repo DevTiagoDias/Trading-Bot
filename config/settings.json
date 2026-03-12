@@ -12,31 +12,38 @@
     "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
   },
   "trading": {
-    "symbols": ["EURUSD", "GBPUSD", "USDJPY","USDCHF"],
-    "timeframe": "H1",
-    "max_positions": 3,
+    "symbols": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "USDCHF",
+      "AUDUSD",
+      "USDCAD"
+    ],
+    "timeframe": "M15",
+    "max_positions": 4,
     "magic_number": 987654321,
-    "slippage": 10,
-    "deviation": 20
+    "slippage": 15,
+    "deviation": 30
   },
   "risk": {
-    "kelly_fraction": 0.25,
+    "kelly_fraction": 0.20,
     "max_risk_per_trade": 0.02,
-    "estimated_win_rate": 0.55,
+    "estimated_win_rate": 0.60,
     "min_kelly_exposure": 0.01,
-    "max_kelly_exposure": 0.10,
-    "stop_loss_atr_multiplier": 2.0,
-    "take_profit_atr_multiplier": 3.0
+    "max_kelly_exposure": 0.05,
+    "stop_loss_atr_multiplier": 1.5,
+    "take_profit_atr_multiplier": 2.0
   },
   "strategy": {
     "ema_period": 200,
     "rsi_period": 14,
-    "rsi_overbought": 70,
-    "rsi_oversold": 30,
+    "rsi_overbought": 75,
+    "rsi_oversold": 25,
     "atr_period": 14,
-    "cusum_threshold": 0.002,
+    "cusum_threshold": 0.0025,
     "cusum_drift": 0.0001,
-    "meta_model_threshold": 0.55,
+    "meta_model_threshold": 0.60,
     "min_data_points": 500,
     "lookback_bars": 1000
   },
@@ -57,7 +64,7 @@
     "log_dir": "logs"
   },
   "system": {
-    "loop_interval": 0.5,
+    "loop_interval": 1.0,
     "retry_attempts": 5,
     "retry_delay": 2.0,
     "exponential_backoff": true,

@@ -11,6 +11,12 @@ Uso Automático:
     Importado pelo main.py para retreinamento periódico.
 """
 
+# --- FILTRO DE AVISOS ---
+import warnings
+warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+# ------------------------
+
 import asyncio
 import json
 import sys
@@ -28,23 +34,13 @@ logger = get_logger(__name__)
 
 async def train_meta_model(
     symbol: str = "EURUSD",
-    timeframe: str = "H1",
-    lookback: int = 5000,
+    timeframe: str = "M15", # Atualizado para o novo padrão Sênior
+    lookback: int = 10000,   # Aumentado para compensar velas menores
     side: int = 3, # 3 = Ambos (Padrão)
     silent: bool = False
 ) -> dict:
     """
     Treina o meta-modelo com dados históricos.
-    
-    Args:
-        symbol: Símbolo para treinamento
-        timeframe: Timeframe dos dados
-        lookback: Número de barras históricas
-        side: 1 (Compra), -1 (Venda), 3 (Ambos)
-        silent: Se True, suprime logs excessivos (para modo automático)
-        
-    Returns:
-        Dicionário com estatísticas do treinamento: {'success': bool, 'acc': float}
     """
     if not silent:
         logger.info("=" * 80)
@@ -142,7 +138,7 @@ async def train_meta_model(
                 final_acc = metrics['test_accuracy'] # Guarda a última acurácia
                 
                 if not silent:
-                    # Relatório Detalhado Completo (Restaurado)
+                    # Relatório Detalhado
                     logger.info(f"Amostras: {metrics['n_samples']}")
                     logger.info(f"Features: {metrics['n_features']}")
                     logger.info(f"Acurácia Treino: {metrics['train_accuracy']:.2%}")
@@ -173,8 +169,6 @@ async def train_meta_model(
         logger.error(f"Erro durante treinamento: {e}", exc_info=True)
     
     finally:
-        # Desconecta apenas se foi chamado diretamente, não pelo singleton em loop
-        # Mas como usamos singleton, disconnect não atrapalha se reconectar depois
         if not silent:
             await client.disconnect()
             
@@ -182,51 +176,38 @@ async def train_meta_model(
 
 
 async def main():
-    """
-    Função principal para execução manual interativa.
-    """
-    # Configura logging
     configure_logging_from_config("config/settings.json")
-    
-    # Menu de opções
     print("\n" + "=" * 60)
-    print("TREINAMENTO DO META-MODELO")
+    print("TREINAMENTO DO META-MODELO (Otimizado M15)")
     print("=" * 60)
     print("\nOpções:")
     print("1. Treinar para sinais de COMPRA")
     print("2. Treinar para sinais de VENDA")
     print("3. Treinar ambos (recomendado)")
     print("0. Sair")
-    print("\n" + "=" * 60)
     
     choice = input("\nEscolha uma opção: ").strip()
-    
-    if choice == "0":
-        print("Saindo...")
-        return
+    if choice == "0": return
     
     symbol = input("Símbolo [EURUSD]: ").strip() or "EURUSD"
-    timeframe = input("Timeframe [H1]: ").strip() or "H1"
-    lookback = int(input("Barras históricas [5000]: ").strip() or "5000")
+    # Atualiza as sugestões de input para o novo padrão
+    timeframe = input("Timeframe [M15]: ").strip() or "M15"
+    lookback = int(input("Barras históricas [10000]: ").strip() or "10000")
     
     side_map = {"1": 1, "2": -1, "3": 3}
-    
     if choice in side_map:
         await train_meta_model(
-            symbol=symbol, 
-            timeframe=timeframe, 
-            lookback=lookback, 
-            side=side_map[choice],
+            symbol=symbol,
+            timeframe=timeframe,
+            lookback=lookback,
+            side=side_map[choice], 
             silent=False
         )
     else:
         print("Opção inválida!")
 
-
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\nInterrompido pelo usuário")
-    except Exception as e:
-        print(f"\n\nErro: {e}")
+        pass

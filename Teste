@@ -5,9 +5,9 @@
     "chat_id": "1994323926"
   },
   "mt5": {
-    "login": 5049775997,
-    "password": "WxAv!8Zq",
-    "server": "MetaQuotes-Demo",
+    "login": 43369680,
+    "password": "Fi4(CJu0",
+    "server": "FBS-Real",
     "timeout": 60000,
     "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
   },
@@ -43,14 +43,14 @@
     "atr_period": 14,
     "cusum_threshold": 0.0025,
     "cusum_drift": 0.0001,
-    "meta_model_threshold": 0.55,
+    "meta_model_threshold": 0.60,
     "min_data_points": 500,
     "lookback_bars": 1000
   },
   "ml": {
-    "n_estimators": 200,
-    "max_depth": 10,
-    "min_samples_split": 100,
+    "n_estimators": 100,
+    "max_depth": 6,
+    "min_samples_split": 50,
     "random_state": 42,
     "model_path": "models/meta_classifier.pkl",
     "retrain_interval_hours": 168

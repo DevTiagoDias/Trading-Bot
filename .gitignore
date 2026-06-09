@@ -31,3 +31,4 @@ wheels/
 env/
 .env/
 
+logs/

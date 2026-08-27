@@ -5,8 +5,8 @@
     "chat_id": "1994323926"
   },
   "mt5": {
-    "login": 5049775997,
-    "password": "WxAv!8Zq",
+    "login": 5051596831,
+    "password": "BdAw-fU2",
     "server": "MetaQuotes-Demo",
     "timeout": 60000,
     "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
@@ -41,7 +41,7 @@
     "rsi_overbought": 75,
     "rsi_oversold": 25,
     "atr_period": 14,
-    "cusum_threshold": 0.0025,
+    "cusum_threshold": 0.00025,
     "cusum_drift": 0.0001,
     "meta_model_threshold": 0.55,
     "min_data_points": 500,
